@@ -1,4 +1,4 @@
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, writeFileSync } from 'node:fs';
 import type {
   FullConfig,
   FullResult,
@@ -7,7 +7,7 @@ import type {
   TestCase,
   TestResult,
 } from '@playwright/test/reporter';
-import { LOG_FILE, type LinkResult } from './linkReport.js';
+import { LOG_FILE, RESULTS_JSON_FILE, type LinkResult } from './linkReport.js';
 
 const ATTACHMENT_NAME = 'link-result';
 
@@ -83,6 +83,27 @@ class RussianReporter implements Reporter {
 
     console.log(summary);
     appendFileSync(LOG_FILE, `${summary}\n`, 'utf-8');
+
+    // Структурированный результат для программной обработки — им пользуется
+    // API-сервер, чтобы вернуть клиенту JSON, не разбирая текстовый лог.
+    writeFileSync(
+      RESULTS_JSON_FILE,
+      JSON.stringify(
+        {
+          finishedAt: new Date().toISOString(),
+          durationMs: result.duration,
+          total: this.results.length,
+          passed,
+          failed,
+          avgLoadMs: avgLoad,
+          avgTotalMs: avgTotal,
+          results: this.results,
+        },
+        null,
+        2,
+      ),
+      'utf-8',
+    );
 
     const seconds = (result.duration / 1000).toFixed(1);
     const statusText =

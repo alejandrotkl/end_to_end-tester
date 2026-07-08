@@ -96,18 +96,18 @@ async function main(): Promise<void> {
   const links = loadLinks(linksFile);
   console.log(`Загружено ссылок: ${links.length} (файл: ${linksFile})`);
 
-  const result = spawnSync(
-    'npx',
-    ['playwright', 'test'],
-    {
-      stdio: 'inherit',
-      shell: true,
-      env: {
-        ...process.env,
-        LINKS_FILE: linksFile,
-      },
+  // Команда передаётся одной строкой, а не через args-массив: так shell
+  // сам находит npx (в т.ч. npx.cmd на Windows) и не возникает
+  // предупреждения Node о неэкранированных аргументах (DEP0190), которое
+  // появляется при combining shell: true с массивом args.
+  const result = spawnSync('npx playwright test', {
+    stdio: 'inherit',
+    shell: true,
+    env: {
+      ...process.env,
+      LINKS_FILE: linksFile,
     },
-  );
+  });
 
   if (result.error) {
     console.error(`Не удалось запустить Playwright: ${result.error.message}`);

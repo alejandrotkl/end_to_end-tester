@@ -1,0 +1,17 @@
+services:
+  link-tester-api:
+    build: .
+    ports:
+      # Docker Compose сам подставляет PORT из .env (переменная лежащего
+      # рядом файла .env, который также передаётся контейнеру через
+      # env_file ниже) — достаточно поменять PORT в одном месте.
+      - "${PORT:-3000}:${PORT:-3000}"
+    env_file:
+      - .env
+    volumes:
+      # Список задач и их логи/результаты переживают перезапуск контейнера.
+      - jobs-data:/app/.jobs
+    restart: unless-stopped
+
+volumes:
+  jobs-data:

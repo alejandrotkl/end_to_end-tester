@@ -10,8 +10,12 @@ export interface LinkResult {
   error?: string;
 }
 
-export const LOG_DIR = 'test-results';
+// LOG_DIR можно переопределить переменной окружения — так API-сервер
+// изолирует лог и результаты каждой задачи в собственную папку
+// (.jobs/<id>), не трогая обычный test-results/ при локальном запуске.
+export const LOG_DIR = process.env.LOG_DIR ?? 'test-results';
 export const LOG_FILE = join(LOG_DIR, 'links.log');
+export const RESULTS_JSON_FILE = join(LOG_DIR, 'results.json');
 
 function formatLine(result: LinkResult): string {
   const status = result.status ?? 'нет ответа';
