@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { extname, join } from 'node:path';
+import { dirname, extname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import multer from 'multer';
 import { loadLinks } from '../loadLinks.js';
@@ -14,6 +15,8 @@ import {
   resultsFileFor,
 } from './jobStore.js';
 import { enqueueJob } from './jobRunner.js';
+import { configureSchedule, DEFAULT_SCHEDULE_INTERVAL_MS, stopSchedule, triggerScheduleNow } from './scheduler.js';
+import { getSchedule, scheduleDirFor } from './scheduleStore.js';
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -26,6 +29,11 @@ declare global {
 
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES) || 2 * 1024 * 1024;
 const MAX_LINKS_PER_JOB = Number(process.env.MAX_LINKS_PER_JOB) || 500;
+const MIN_SCHEDULE_INTERVAL_MS = 60 * 1000;
+
+// src/server/app.ts -> ../../public — простая статическая страница
+// (public/index.html + app.js), чтобы пользоваться API без консоли.
+const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../public');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -75,6 +83,7 @@ export function createApp() {
 
   app.disable('x-powered-by');
   app.use(express.json({ limit: MAX_UPLOAD_BYTES }));
+  app.use(express.static(PUBLIC_DIR));
 
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok' });
@@ -195,6 +204,124 @@ export function createApp() {
     }
 
     deleteJob(job.id);
+    res.status(204).send();
+  });
+
+  // Плановые проверки: у каждого API-ключа может быть настроено одно
+  // расписание (список ссылок + интервал повтора). PUT создаёт/обновляет
+  // его и сразу выполняет первую проверку; дальше сервер сам повторяет
+  // проверку через заданный интервал после КАЖДОГО прогона — планового
+  // или запущенного вручную через /schedule/run.
+  api.put('/schedule', upload.single('file'), (req: Request, res: Response) => {
+    const apiKeyName = req.apiKeyName!;
+    const dir = scheduleDirFor(apiKeyName);
+    mkdirSync(dir, { recursive: true });
+
+    let linksFileName: string;
+    let linksCount: number;
+
+    try {
+      if (req.file) {
+        const ext = extname(req.file.originalname).toLowerCase();
+
+        if (ext !== '.txt' && ext !== '.json') {
+          throw new Error('Поддерживаются только файлы .txt и .json.');
+        }
+
+        linksFileName = `input${ext}`;
+        writeFileSync(join(dir, linksFileName), req.file.buffer);
+      } else if (Array.isArray((req.body as { links?: unknown })?.links)) {
+        linksFileName = 'input.json';
+        writeFileSync(
+          join(dir, linksFileName),
+          JSON.stringify({ links: (req.body as { links: unknown[] }).links }, null, 2),
+          'utf-8',
+        );
+      } else {
+        throw new Error(
+          'Нужно передать либо файл (поле file, multipart/form-data), либо JSON-тело вида { "links": ["https://..."] }.',
+        );
+      }
+
+      // Удаляем файл с другим расширением от предыдущей настройки этого
+      // расписания, если он остался, — иначе в папке будут копиться
+      // устаревшие input.txt / input.json.
+      for (const ext of ['.txt', '.json']) {
+        const candidate = join(dir, `input${ext}`);
+        if (`input${ext}` !== linksFileName && existsSync(candidate)) {
+          rmSync(candidate, { force: true });
+        }
+      }
+
+      const links = loadLinks(join(dir, linksFileName));
+
+      if (links.length > MAX_LINKS_PER_JOB) {
+        throw new Error(
+          `Слишком много ссылок в расписании: ${links.length}. Максимум: ${MAX_LINKS_PER_JOB} (настраивается через MAX_LINKS_PER_JOB).`,
+        );
+      }
+
+      linksCount = links.length;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(400).json({ error: message });
+      return;
+    }
+
+    const intervalMinutesRaw = (req.body as { intervalMinutes?: unknown })?.intervalMinutes;
+    let intervalMs = DEFAULT_SCHEDULE_INTERVAL_MS;
+
+    if (intervalMinutesRaw !== undefined) {
+      const intervalMinutes = Number(intervalMinutesRaw);
+
+      if (!Number.isFinite(intervalMinutes) || intervalMinutes <= 0) {
+        res.status(400).json({ error: 'intervalMinutes должен быть положительным числом.' });
+        return;
+      }
+
+      intervalMs = Math.round(intervalMinutes * 60 * 1000);
+
+      if (intervalMs < MIN_SCHEDULE_INTERVAL_MS) {
+        res.status(400).json({
+          error: `Слишком маленький интервал: минимум ${MIN_SCHEDULE_INTERVAL_MS / 60000} мин.`,
+        });
+        return;
+      }
+    }
+
+    const schedule = configureSchedule(apiKeyName, linksFileName, linksCount, intervalMs);
+    res.status(200).json(schedule);
+  });
+
+  api.get('/schedule', (req: Request, res: Response) => {
+    const schedule = getSchedule(req.apiKeyName!);
+
+    if (!schedule) {
+      res.status(404).json({ error: 'Расписание не настроено. Настройте его через PUT /api/v1/schedule.' });
+      return;
+    }
+
+    res.json(schedule);
+  });
+
+  api.post('/schedule/run', (req: Request, res: Response) => {
+    try {
+      const schedule = triggerScheduleNow(req.apiKeyName!);
+      res.status(202).json(schedule);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(409).json({ error: message });
+    }
+  });
+
+  api.delete('/schedule', (req: Request, res: Response) => {
+    const removed = stopSchedule(req.apiKeyName!);
+
+    if (!removed) {
+      res.status(404).json({ error: 'Расписание не настроено.' });
+      return;
+    }
+
     res.status(204).send();
   });
 

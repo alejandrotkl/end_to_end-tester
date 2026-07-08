@@ -119,6 +119,11 @@ export function listJobs(apiKeyName: string): Job[] {
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
+/** Все задачи всех API-ключей — нужно только для фоновой очистки старых логов (см. cleanup.ts). */
+export function listAllJobs(): Job[] {
+  return Array.from(jobs.values());
+}
+
 export function deleteJob(id: string): boolean {
   if (!jobs.has(id)) {
     return false;

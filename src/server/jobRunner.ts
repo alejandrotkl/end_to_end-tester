@@ -18,6 +18,7 @@ const MAX_CONCURRENT_JOBS = Math.max(1, Number(process.env.MAX_CONCURRENT_JOBS) 
 interface QueueEntry {
   jobId: string;
   linksFile: string;
+  onComplete?: (job: Job | undefined) => void;
 }
 
 let activeCount = 0;
@@ -159,15 +160,24 @@ function pump(): void {
       })
       .finally(() => {
         activeCount -= 1;
+        // onComplete вызывается уже после того, как задача полностью
+        // завершилась (успешно или с ошибкой) — на этом строится
+        // плановая проверка по расписанию: следующий запуск планируется
+        // не по жёсткому времени, а через N минут ПОСЛЕ завершения этой.
+        entry.onComplete?.(getJob(entry.jobId));
         pump();
       });
   }
 }
 
-export function enqueueJob(job: Job, linksFile: string): void {
+export function enqueueJob(
+  job: Job,
+  linksFile: string,
+  onComplete?: (job: Job | undefined) => void,
+): void {
   console.log(
     `[job ${shortId(job.id)}] Принята задача от «${job.apiKeyName}»: ${job.totalLinks} ссылок(и). Постановка в очередь.`,
   );
-  queue.push({ jobId: job.id, linksFile });
+  queue.push({ jobId: job.id, linksFile, onComplete });
   pump();
 }

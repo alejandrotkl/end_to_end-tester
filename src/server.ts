@@ -10,14 +10,20 @@ loadEnv({ quiet: true });
 
 const { createApp } = await import('./server/app.js');
 const { loadJobsFromDisk } = await import('./server/jobStore.js');
+const { loadSchedulesFromDisk } = await import('./server/scheduleStore.js');
+const { resumeSchedulesOnStartup } = await import('./server/scheduler.js');
+const { startCleanupSchedule } = await import('./server/cleanup.js');
 
 const PORT = Number(process.env.PORT) || 3000;
 
 loadJobsFromDisk();
+loadSchedulesFromDisk();
 
 const app = createApp();
 
 app.listen(PORT, () => {
   console.log(`API-сервер Playwright Link Tester запущен: http://localhost:${PORT}`);
   console.log(`Проверка состояния: GET http://localhost:${PORT}/health`);
+  resumeSchedulesOnStartup();
+  startCleanupSchedule();
 });
