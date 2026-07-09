@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, writeFileSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 
 export interface LinkResult {
@@ -8,6 +8,14 @@ export interface LinkResult {
   totalMs: number;
   passed: boolean;
   error?: string;
+  /** Страница ответила HTTP 403, и для её домена была выполнена попытка входа. */
+  usedLogin?: boolean;
+  /** Страница ответила HTTP 403, но данные для входа по домену не настроены. */
+  needsLogin?: boolean;
+  /** Порядковый номер ссылки в списке на момент проверки (её приоритет — чем меньше, тем раньше). */
+  priority?: number;
+  /** Таймаут, с которым проверялась именно эта ссылка (мс) — совпадает с общим, если не задан свой. */
+  timeoutMs?: number;
 }
 
 // LOG_DIR можно переопределить переменной окружения — так API-сервер
@@ -16,13 +24,19 @@ export interface LinkResult {
 export const LOG_DIR = process.env.LOG_DIR ?? 'test-results';
 export const LOG_FILE = join(LOG_DIR, 'links.log');
 export const RESULTS_JSON_FILE = join(LOG_DIR, 'results.json');
+export const PROGRESS_JSON_FILE = join(LOG_DIR, 'progress.json');
 
 function formatLine(result: LinkResult): string {
   const status = result.status ?? 'нет ответа';
   const outcome = result.passed ? 'УСПЕХ' : 'ОШИБКА';
+  const loginNote = result.usedLogin
+    ? ' | вход выполнен'
+    : result.needsLogin
+      ? ' | ТРЕБУЕТСЯ ВХОД (данные не настроены)'
+      : '';
 
   let line =
-    `[${outcome}] ${result.url} | HTTP ${status} | загрузка: ${result.loadMs} мс | всего: ${result.totalMs} мс`;
+    `[${outcome}] ${result.url} | HTTP ${status} | загрузка: ${result.loadMs} мс | всего: ${result.totalMs} мс${loginNote}`;
 
   if (result.error) {
     line += ` | ${result.error}`;
@@ -47,6 +61,8 @@ export function initLinkLog(): void {
 
 export function logLinkResult(result: LinkResult): void {
   const line = formatLine(result);
-  console.log(line);
+  // Как раньше: сразу в консоль (сервер пробрасывает stdout с префиксом [job …]).
+  // writeSync — без буферизации pipe на Windows/Linux.
+  writeSync(1, `${line}\n`);
   appendFileSync(LOG_FILE, `${line}\n`, 'utf-8');
 }

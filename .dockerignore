@@ -5,6 +5,7 @@ playwright-report
 blob-report
 playwright/.cache
 .jobs
+.credentials
 .git
 .env
 *.log

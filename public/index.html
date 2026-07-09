@@ -9,6 +9,10 @@
 <body>
   <header>
     <h1>Playwright Link Tester</h1>
+    <nav class="nav-links">
+      <a href="/" class="nav-link active">Проверка</a>
+      <a href="/logs.html" class="nav-link">Логи задач</a>
+    </nav>
     <div class="key-row">
       <label for="api-key">API-ключ</label>
       <input type="password" id="api-key" placeholder="X-API-Key" autocomplete="off" />
@@ -21,60 +25,40 @@
     <section id="error-box" class="error-box hidden"></section>
 
     <section class="card">
-      <h2>Плановая проверка (по расписанию)</h2>
-      <p class="hint">
-        Сервер сам, без внешних действий, будет периодически перепроверять этот список ссылок.
-        Интервал отсчитывается заново после каждой проверки — в том числе после ручного запуска ниже.
-      </p>
-      <p class="hint">По одной ссылке на строку, либо загрузите файл (.txt или .json) — тогда поле ниже игнорируется.</p>
-      <textarea id="schedule-links" rows="5"></textarea>
+      <h2>Проверка ссылок</h2>
+      <div id="links-rows" class="link-rows"></div>
+      <button type="button" id="links-add" class="secondary small-btn">+ Добавить ссылку</button>
       <div class="actions">
-        <label for="schedule-file" class="file-label">Файл со ссылками</label>
-        <input type="file" id="schedule-file" accept=".txt,.json" />
+        <label for="links-file" class="file-label">Загрузить из файла</label>
+        <input type="file" id="links-file" accept=".txt,.json" />
       </div>
+
       <div class="actions">
+        <button id="manual-run">Проверить один раз</button>
         <label for="schedule-interval">Интервал (мин.)</label>
         <input type="number" id="schedule-interval" min="1" step="1" value="5" />
         <button id="schedule-save">Сохранить расписание</button>
         <button id="schedule-run">Проверить сейчас</button>
         <button id="schedule-stop" class="danger">Остановить</button>
       </div>
+      <p><span id="manual-status" class="status-text"></span></p>
       <div id="schedule-status" class="status-box"></div>
     </section>
 
-    <section class="card">
-      <h2>Ручная проверка</h2>
-      <p class="hint">По одной ссылке на строку, либо загрузите файл (.txt или .json) — тогда поле ниже игнорируется.</p>
-      <textarea id="manual-links" rows="5"></textarea>
-      <div class="actions">
-        <label for="manual-file" class="file-label">Файл со ссылками</label>
-        <input type="file" id="manual-file" accept=".txt,.json" />
-      </div>
-      <div class="actions">
-        <button id="manual-run">Запустить проверку</button>
-        <span id="manual-status" class="status-text"></span>
-      </div>
-      <div id="manual-results"></div>
-    </section>
-
-    <section class="card">
-      <h2>Задачи</h2>
-      <div class="actions">
-        <button id="jobs-refresh">Обновить список</button>
-      </div>
-      <table id="jobs-table">
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>Статус</th>
-            <th>Создана</th>
-            <th>Ссылок</th>
-            <th>Итог</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+    <section id="progress-card" class="card progress-card">
+      <h2>Сейчас выполняется</h2>
+      <p class="hint">
+        Задача <span id="progress-job-id">—</span>: проверено <span id="progress-count">0</span> из
+        <span id="progress-total">0</span>.
+      </p>
+      <p class="progress-current-line">
+        <strong>Проверяется:</strong> <span id="progress-current" class="link-cell">сейчас ничего не проверяется</span>
+      </p>
+      <p class="progress-current-line">
+        <strong>Начало проверки:</strong> <span id="progress-started">—</span> &nbsp;·&nbsp;
+        <strong>Следующая по расписанию:</strong> <span id="progress-next-run">—</span>
+      </p>
+      <div id="progress-results"></div>
     </section>
   </main>
 

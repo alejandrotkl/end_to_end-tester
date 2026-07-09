@@ -35,6 +35,31 @@ header h1 {
   font-size: 20px;
 }
 
+.nav-links {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.nav-link {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+
+.nav-link:hover {
+  color: var(--text);
+  background: #eef2ff;
+}
+
+.nav-link.active {
+  color: var(--accent);
+  background: #eff6ff;
+}
+
 .key-row {
   display: flex;
   align-items: center;
@@ -47,7 +72,7 @@ header h1 {
 }
 
 main {
-  max-width: 900px;
+  max-width: 1040px;
   margin: 24px auto;
   padding: 0 16px;
   display: flex;
@@ -67,6 +92,39 @@ main {
   font-size: 16px;
 }
 
+.tabs-bar {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin: -4px -4px 16px;
+}
+
+.tab-btn {
+  background: none;
+  border: none;
+  border-radius: 0;
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+
+.tab-btn:hover {
+  color: var(--text);
+  background: none;
+}
+
+.tab-btn.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.tab-panel.hidden {
+  display: none;
+}
+
 .hint {
   color: var(--muted);
   font-size: 13px;
@@ -76,7 +134,8 @@ main {
 textarea,
 input[type="text"],
 input[type="password"],
-input[type="number"] {
+input[type="number"],
+select {
   font: inherit;
   padding: 8px 10px;
   border: 1px solid var(--border);
@@ -94,6 +153,10 @@ textarea {
 
 input[type="number"] {
   width: 80px;
+}
+
+.link-timeout {
+  width: 70px !important;
 }
 
 input[type="file"] {
@@ -240,4 +303,267 @@ th {
 .small-btn {
   padding: 4px 10px;
   font-size: 12px;
+}
+
+details {
+  margin-top: 10px;
+}
+
+details summary {
+  cursor: pointer;
+}
+
+details .actions {
+  margin-top: 8px;
+}
+
+.link-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.link-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--card-bg);
+  border-radius: 6px;
+  transition: opacity 0.15s ease;
+}
+
+.link-row.dragging {
+  opacity: 0.4;
+}
+
+.link-row.drag-over {
+  box-shadow: 0 -2px 0 0 var(--accent);
+}
+
+.link-row .link-url {
+  flex: 1;
+  min-width: 0;
+}
+
+.link-timeout-unit {
+  margin: 0;
+}
+
+.link-handle {
+  cursor: grab;
+  color: var(--muted);
+  font-size: 16px;
+  padding: 0 2px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.link-handle:active {
+  cursor: grabbing;
+}
+
+.link-rank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #e5e7eb;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.badge.rank {
+  background: #e5e7eb;
+  color: var(--muted);
+}
+
+.job-row.expanded {
+  background: #f8fafc;
+}
+
+.job-results-row > td {
+  padding: 0 12px 12px;
+  background: #f8fafc;
+  border-bottom: 1px solid var(--border);
+}
+
+.job-results-panel {
+  margin-top: 4px;
+}
+
+.job-results-table {
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.card-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.card-header-row h2 {
+  margin: 0;
+}
+
+.job-actions-cell {
+  white-space: nowrap;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+/* Модалка скачивания JSON */
+.modal.hidden {
+  display: none;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.modal-dialog {
+  position: relative;
+  z-index: 1;
+  width: min(760px, 100%);
+  max-height: min(85vh, 780px);
+  overflow: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px 20px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+}
+
+.modal-dialog h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.download-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.download-toolbar-left {
+  margin-top: 0;
+}
+
+.download-filters {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.download-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.download-filter input[type="date"],
+.download-filter input[type="time"] {
+  width: auto;
+  min-width: 118px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.modal-actions {
+  margin-top: 14px;
+  justify-content: flex-end;
+}
+
+.download-list {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-height: 360px;
+  overflow: auto;
+  user-select: none;
+}
+
+.download-empty {
+  margin: 0;
+  padding: 16px;
+}
+
+.download-item {
+  display: grid;
+  grid-template-columns: auto 72px auto 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.download-item:last-child {
+  border-bottom: none;
+}
+
+.download-item:hover {
+  background: #f8fafc;
+}
+
+.download-item.selected {
+  background: #eff6ff;
+}
+
+.download-item-id {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 13px;
+}
+
+.progress-card {
+  border-color: var(--accent);
+}
+
+.divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 18px 0;
+}
+
+.card h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.progress-current-line {
+  margin: 8px 0;
+  font-size: 14px;
+}
+
+.card {
+  overflow-x: auto;
 }

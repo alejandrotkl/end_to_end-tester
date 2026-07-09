@@ -46,6 +46,11 @@ export function resultsFileFor(id: string): string {
   return join(jobDirFor(id), 'results.json');
 }
 
+/** Пишется постепенно, по ходу прогона (см. src/russianReporter.ts) — не только после завершения задачи, как results.json. */
+export function progressFileFor(id: string): string {
+  return join(jobDirFor(id), 'progress.json');
+}
+
 function persistIndex(): void {
   mkdirSync(JOBS_DIR, { recursive: true });
   writeFileSync(INDEX_FILE, JSON.stringify(Array.from(jobs.values()), null, 2), 'utf-8');
@@ -134,4 +139,26 @@ export function deleteJob(id: string): boolean {
 
   rmSync(jobDirFor(id), { recursive: true, force: true });
   return true;
+}
+
+/**
+ * Удаляет все завершённые задачи (completed/failed) для API-ключа.
+ * Выполняющиеся (pending/running) не трогает. Независимо от автоочистки
+ * по сроку хранения (cleanup.ts) — вызывается вручную из веб-интерфейса.
+ */
+export function deleteFinishedJobs(apiKeyName: string): number {
+  const toDelete = listJobs(apiKeyName).filter(
+    (job) => job.status === 'completed' || job.status === 'failed',
+  );
+
+  for (const job of toDelete) {
+    jobs.delete(job.id);
+    rmSync(jobDirFor(job.id), { recursive: true, force: true });
+  }
+
+  if (toDelete.length > 0) {
+    persistIndex();
+  }
+
+  return toDelete.length;
 }

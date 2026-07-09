@@ -106,6 +106,13 @@ async function main(): Promise<void> {
     env: {
       ...process.env,
       LINKS_FILE: linksFile,
+      // Терминал подключён к этому процессу напрямую (stdio: 'inherit'),
+      // поэтому здесь можно интерактивно спросить логин/пароль при HTTP 403
+      // (см. tests/links.spec.ts и src/credentialPrompt.ts). На сервере
+      // такого терминала нет — там используются только заранее сохранённые
+      // данные из своего файла на каждый API-ключ.
+      CREDENTIALS_FILE: resolve('.credentials', 'cli.json'),
+      INTERACTIVE_LOGIN: 'true',
     },
   });
 

@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Логи задач — Playwright Link Tester</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>Playwright Link Tester</h1>
+    <nav class="nav-links">
+      <a href="/" class="nav-link">Проверка</a>
+      <a href="/logs.html" class="nav-link active">Логи задач</a>
+    </nav>
+    <div class="key-row">
+      <label for="api-key">API-ключ</label>
+      <input type="password" id="api-key" placeholder="X-API-Key" autocomplete="off" />
+      <button id="save-key">Сохранить</button>
+      <span id="key-status" class="status-text"></span>
+    </div>
+  </header>
+
+  <main>
+    <section id="error-box" class="error-box hidden"></section>
+
+    <section class="card">
+      <h2>Логи задач</h2>
+      <div class="actions">
+        <button id="jobs-refresh">Обновить список</button>
+        <button id="jobs-download-json" class="secondary">Скачать в формате JSON</button>
+        <button id="jobs-clear-all" class="danger">Очистить все логи</button>
+      </div>
+      <table id="jobs-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Статус</th>
+            <th>Создана</th>
+            <th>Ссылок</th>
+            <th>Итог</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
+
+  <!-- Модалка выбора логов для скачивания JSON -->
+  <div id="download-modal" class="modal hidden" aria-hidden="true">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-dialog" role="dialog" aria-labelledby="download-modal-title">
+      <h3 id="download-modal-title">Скачать логи в JSON</h3>
+      <p class="hint">Нажмите на строку или галочку, чтобы выбрать лог. Можно выделить несколько, зажав ЛКМ и протянув по списку.</p>
+      <div class="download-toolbar">
+        <div class="actions download-toolbar-left">
+          <button type="button" id="download-select-all" class="secondary small-btn">Выбрать все</button>
+          <button type="button" id="download-select-none" class="secondary small-btn">Снять все</button>
+          <span id="download-selected-count" class="status-text">Выбрано: 0</span>
+        </div>
+        <div class="download-filters">
+          <label class="download-filter">
+            <span>Дата с</span>
+            <input type="date" id="filter-date-from" />
+          </label>
+          <label class="download-filter">
+            <span>Дата по</span>
+            <input type="date" id="filter-date-to" />
+          </label>
+          <label class="download-filter">
+            <span>Время с</span>
+            <input type="time" id="filter-time-from" step="60" />
+          </label>
+          <label class="download-filter">
+            <span>Время по</span>
+            <input type="time" id="filter-time-to" step="60" />
+          </label>
+          <button type="button" id="filter-reset" class="secondary small-btn">Сбросить фильтр</button>
+        </div>
+      </div>
+      <div id="download-list" class="download-list"></div>
+      <div class="actions modal-actions">
+        <button type="button" id="download-confirm">Скачать выбранные</button>
+        <button type="button" id="download-cancel" class="secondary" data-close-modal>Отмена</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="logs.js"></script>
+</body>
+</html>

@@ -5,16 +5,21 @@ import { fileURLToPath } from 'node:url';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import multer from 'multer';
 import { loadLinks } from '../loadLinks.js';
+import { deleteDomainCredential, listDomainCredentials, saveDomainCredential } from '../credentialStore.js';
 import { findApiKeyOwner, loadApiKeys } from './apiKeys.js';
+import { credentialsFileFor } from './credentialStore.js';
 import {
   createJob,
+  deleteFinishedJobs,
   deleteJob,
   getJob,
   jobDirFor,
   listJobs,
+  progressFileFor,
   resultsFileFor,
 } from './jobStore.js';
 import { enqueueJob } from './jobRunner.js';
+import { getLinksDraft, saveLinksDraft, type DraftLink } from './linksDraftStore.js';
 import { configureSchedule, DEFAULT_SCHEDULE_INTERVAL_MS, stopSchedule, triggerScheduleNow } from './scheduler.js';
 import { getSchedule, scheduleDirFor } from './scheduleStore.js';
 
@@ -42,11 +47,24 @@ const upload = multer({
 
 // В Express 5 значения req.params типизированы как string | string[] —
 // это нужно только для wildcard-маршрутов (например, "/files/*"), которых
-// у нас нет. Для обычного ":id" это всегда строка, но TypeScript об этом
-// не знает, поэтому явно приводим тип.
+// у нас нет. Для обычного ":id"/":domain" это всегда строка, но TypeScript
+// об этом не знает, поэтому явно приводим тип.
+function routeParam(req: Request, name: string): string {
+  const value = req.params[name];
+  return Array.isArray(value) ? value[0] : value;
+}
+
 function idParam(req: Request): string {
-  const { id } = req.params;
-  return Array.isArray(id) ? id[0] : id;
+  return routeParam(req, 'id');
+}
+
+/** Позволяет вставить в поле домена целый URL (https://example.com/login) — берём только hostname. */
+function normalizeDomain(raw: string): string {
+  try {
+    return new URL(raw).hostname;
+  } catch {
+    return raw.trim();
+  }
 }
 
 function bearerToken(header: string | undefined): string | undefined {
@@ -164,6 +182,44 @@ export function createApp() {
     res.json(job);
   });
 
+  // Прогресс задачи в реальном времени: какая ссылка проверяется прямо
+  // сейчас и результаты уже готовых, не дожидаясь завершения всей задачи —
+  // используется веб-интерфейсом для панели «Сейчас выполняется». В отличие
+  // от /results работает на любом статусе задачи, не только completed.
+  api.get('/jobs/:id/progress', (req: Request, res: Response) => {
+    const job = getJob(idParam(req));
+
+    if (!job || job.apiKeyName !== req.apiKeyName) {
+      res.status(404).json({ error: 'Задача не найдена.' });
+      return;
+    }
+
+    const progressPath = progressFileFor(job.id);
+    let progress: { total: number; completed: number; current: string | null; results: unknown[] } = {
+      total: job.totalLinks,
+      completed: 0,
+      current: null,
+      results: [],
+    };
+
+    if (existsSync(progressPath)) {
+      try {
+        progress = JSON.parse(readFileSync(progressPath, 'utf-8'));
+      } catch {
+        // Файл ещё не дописан (гонка с записью) — отдаём значения по умолчанию.
+      }
+    }
+
+    res.json({
+      ...progress,
+      status: job.status,
+      jobId: job.id,
+      createdAt: job.createdAt,
+      startedAt: job.startedAt,
+      finishedAt: job.finishedAt,
+    });
+  });
+
   api.get('/jobs/:id/results', (req: Request, res: Response) => {
     const job = getJob(idParam(req));
 
@@ -188,6 +244,15 @@ export function createApp() {
     }
 
     res.type('application/json').send(readFileSync(resultsPath, 'utf-8'));
+  });
+
+  // Ручная очистка всех завершённых логов текущего API-ключа — независимо
+  // от автоматической очистки по LOG_RETENTION_DAYS (см. cleanup.ts).
+  // Выполняющиеся задачи не удаляются. Маршрут объявлен ДО /jobs/:id,
+  // чтобы Express не принял пустой :id.
+  api.delete('/jobs', (req: Request, res: Response) => {
+    const removed = deleteFinishedJobs(req.apiKeyName!);
+    res.json({ removed });
   });
 
   api.delete('/jobs/:id', (req: Request, res: Response) => {
@@ -319,6 +384,94 @@ export function createApp() {
 
     if (!removed) {
       res.status(404).json({ error: 'Расписание не настроено.' });
+      return;
+    }
+
+    res.status(204).send();
+  });
+
+  // Общий черновик списка ссылок в веб-интерфейсе (см. linksDraftStore.ts) —
+  // так пользователи с разных устройств/вкладок, работающие с одним
+  // API-ключом, видят один и тот же список и правки друг друга.
+  api.get('/links-draft', (req: Request, res: Response) => {
+    res.json(getLinksDraft(req.apiKeyName!));
+  });
+
+  api.put('/links-draft', (req: Request, res: Response) => {
+    const rawLinks = (req.body as { links?: unknown })?.links;
+
+    if (!Array.isArray(rawLinks)) {
+      res.status(400).json({ error: 'Нужно передать массив links.' });
+      return;
+    }
+
+    if (rawLinks.length > MAX_LINKS_PER_JOB) {
+      res.status(400).json({
+        error: `Слишком много ссылок: ${rawLinks.length}. Максимум: ${MAX_LINKS_PER_JOB} (настраивается через MAX_LINKS_PER_JOB).`,
+      });
+      return;
+    }
+
+    const links: DraftLink[] = rawLinks
+      .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+      .filter((item) => typeof item.url === 'string')
+      .map((item) => ({
+        url: item.url as string,
+        timeoutMs: typeof item.timeoutMs === 'number' ? item.timeoutMs : undefined,
+      }));
+
+    res.json(saveLinksDraft(req.apiKeyName!, links));
+  });
+
+  // Данные для входа на случай HTTP 403: при проверке ссылки, требующей
+  // авторизации, сервер сам залогинится через форму на loginUrl и повторит
+  // проверку (см. tests/links.spec.ts). Данные хранятся отдельно на каждый
+  // API-ключ и никогда не возвращаются клиенту в открытом виде (только
+  // домен и адрес страницы входа — без пароля).
+  api.get('/credentials', (req: Request, res: Response) => {
+    const list = listDomainCredentials(credentialsFileFor(req.apiKeyName!)).map(
+      ({ password: _password, ...rest }) => rest,
+    );
+    res.json(list);
+  });
+
+  api.put('/credentials/:domain', (req: Request, res: Response) => {
+    const domain = normalizeDomain(routeParam(req, 'domain'));
+    const body = (req.body ?? {}) as Record<string, unknown>;
+
+    const loginUrl = typeof body.loginUrl === 'string' ? body.loginUrl : undefined;
+    const username = typeof body.username === 'string' ? body.username : undefined;
+    const password = typeof body.password === 'string' ? body.password : undefined;
+    const usernameSelector = typeof body.usernameSelector === 'string' ? body.usernameSelector : undefined;
+    const passwordSelector = typeof body.passwordSelector === 'string' ? body.passwordSelector : undefined;
+    const submitSelector = typeof body.submitSelector === 'string' ? body.submitSelector : undefined;
+
+    if (!loginUrl || !username || !password) {
+      res.status(400).json({
+        error: 'Нужно передать строки loginUrl, username и password.',
+      });
+      return;
+    }
+
+    saveDomainCredential(credentialsFileFor(req.apiKeyName!), {
+      domain,
+      loginUrl,
+      username,
+      password,
+      usernameSelector,
+      passwordSelector,
+      submitSelector,
+    });
+
+    res.status(200).json({ domain, loginUrl, username, usernameSelector, passwordSelector, submitSelector });
+  });
+
+  api.delete('/credentials/:domain', (req: Request, res: Response) => {
+    const domain = normalizeDomain(routeParam(req, 'domain'));
+    const removed = deleteDomainCredential(credentialsFileFor(req.apiKeyName!), domain);
+
+    if (!removed) {
+      res.status(404).json({ error: 'Данные для этого домена не настроены.' });
       return;
     }
 

@@ -6,3 +6,4 @@ blob-report/
 playwright/.cache/
 .env
 .jobs/
+.credentials/
