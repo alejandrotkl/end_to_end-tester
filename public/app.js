@@ -36,6 +36,17 @@ const els = {
   scheduleRun: document.getElementById('schedule-run'),
   scheduleStop: document.getElementById('schedule-stop'),
   scheduleStatus: document.getElementById('schedule-status'),
+
+  loginModal: document.getElementById('login-modal'),
+  loginBackdrop: document.getElementById('login-backdrop'),
+  loginInfo: document.getElementById('login-modal-info'),
+  loginDomain: document.getElementById('login-domain'),
+  loginUrl: document.getElementById('login-url'),
+  loginUsername: document.getElementById('login-username'),
+  loginPassword: document.getElementById('login-password'),
+  loginStatus: document.getElementById('login-modal-status'),
+  loginCancel: document.getElementById('login-cancel'),
+  loginSubmit: document.getElementById('login-submit'),
 };
 
 els.apiKeyInput.value = state.apiKey;
@@ -111,6 +122,17 @@ function formatDuration(ms) {
 
 function rankBadge(priority) {
   return priority ? `<span class="badge rank">${priority}</span>` : '—';
+}
+
+function loginNote(r) {
+  if (r.usedLogin) return '<span class="hint">вход выполнен</span>';
+  if (r.needsLogin) return '<span class="hint" style="color:var(--danger)">требуется вход</span>';
+  return '';
+}
+
+function formatErrorText(error) {
+  if (!error) return '';
+  return error.replace(/\u001b\[[0-9;]*m/g, '').split(/\n\s*\n/)[0].trim();
 }
 
 function escapeHtml(value) {
@@ -447,8 +469,8 @@ function renderProgress(progress) {
         <td>${rankBadge(r.priority)}</td>
         <td>${r.status ?? '—'}</td>
         <td>${formatDuration(r.totalMs)}</td>
-        <td>${r.passed ? '✅' : '❌'}</td>
-        <td class="link-cell">${escapeHtml(r.error || '')}</td>
+        <td>${r.passed ? '✅' : '❌'} ${loginNote(r)}</td>
+        <td class="link-cell">${escapeHtml(formatErrorText(r.error))}</td>
       </tr>`,
     )
     .join('');
@@ -460,9 +482,154 @@ function renderProgress(progress) {
       </thead>
       <tbody>${rows}</tbody>
     </table>`;
+
+  maybeShowLoginPrompt(progress);
 }
 
 renderIdleProgress();
+
+// --- Всплывающее окно входа (страница требует авторизацию) ---
+//
+// Если проверка обнаружила, что ссылка требует вход (HTTP 403 или вместо
+// содержимого показана форма логина), в результате появляется loginDomain.
+// Показываем окно ввода данных; после сохранения запускаем повторную
+// проверку только затронутых ссылок — тестер сам залогинится и перейдёт
+// на исходную страницу уже в авторизованной сессии.
+
+const loginPrompt = {
+  open: false,
+  current: null,
+  // Ключи "jobId:domain", по которым окно уже показывалось (введены данные
+  // или нажато «Пропустить») — чтобы не открывать его заново на каждый
+  // опрос прогресса той же задачи.
+  handled: new Set(),
+};
+
+function collectLoginPrompts(progress) {
+  const byDomain = new Map();
+
+  for (const r of progress.results || []) {
+    if (!r.loginDomain) continue;
+
+    // Окно нужно в двух случаях: данных для домена нет (needsLogin) или
+    // вход был выполнен с сохранёнными данными, но не помог (usedLogin + ошибка).
+    if (!(r.needsLogin || (r.usedLogin && !r.passed))) continue;
+
+    const key = `${progress.jobId}:${r.loginDomain}`;
+    if (loginPrompt.handled.has(key)) continue;
+
+    if (!byDomain.has(r.loginDomain)) {
+      byDomain.set(r.loginDomain, {
+        key,
+        domain: r.loginDomain,
+        loginPageUrl: r.loginPageUrl || '',
+        retryLinks: [],
+        loginFailed: false,
+      });
+    }
+
+    const entry = byDomain.get(r.loginDomain);
+    entry.retryLinks.push({ url: r.url, timeoutMs: r.timeoutMs || 30000 });
+    if (!entry.loginPageUrl && r.loginPageUrl) entry.loginPageUrl = r.loginPageUrl;
+    if (r.usedLogin && !r.passed) entry.loginFailed = true;
+  }
+
+  return Array.from(byDomain.values());
+}
+
+function maybeShowLoginPrompt(progress) {
+  if (loginPrompt.open) return;
+
+  const prompts = collectLoginPrompts(progress);
+  if (prompts.length === 0) return;
+
+  openLoginModal(prompts[0]);
+}
+
+function isEphemeralLoginUrl(url) {
+  return /[?&](state|bo|code_challenge)=|\/blitz\/|openid-connect\/auth|\/realms\//i.test(url || '');
+}
+
+function openLoginModal(prompt) {
+  loginPrompt.open = true;
+  loginPrompt.current = prompt;
+
+  const urls = prompt.retryLinks.map((l) => l.url).join(', ');
+  els.loginInfo.textContent = prompt.loginFailed
+    ? `Вход на «${prompt.domain}» с сохранёнными данными не удался. Проверьте логин и пароль — после сохранения ссылки будут проверены снова: ${urls}`
+    : `Для проверки требуется вход на «${prompt.domain}». После входа тестер вернётся на исходную страницу и проверит её: ${urls}`;
+
+  els.loginDomain.value = prompt.domain;
+  // OAuth/SSO URL с одноразовым state нельзя сохранять — при следующем
+  // входе state уже протух. Оставляем поле пустым: тестер заполнит форму
+  // на свежем редиректе, который получит при открытии исходной ссылки.
+  els.loginUrl.value = isEphemeralLoginUrl(prompt.loginPageUrl) ? '' : prompt.loginPageUrl || '';
+  els.loginUrl.placeholder =
+    'оставьте пустым для SSO (Keycloak/Blitz) — форма откроется сама при проверке';
+  els.loginUsername.value = '';
+  els.loginPassword.value = '';
+  els.loginStatus.textContent = '';
+  els.loginSubmit.disabled = false;
+  els.loginModal.classList.remove('hidden');
+  els.loginUsername.focus();
+}
+
+function closeLoginModal() {
+  if (loginPrompt.current) {
+    loginPrompt.handled.add(loginPrompt.current.key);
+  }
+  loginPrompt.open = false;
+  loginPrompt.current = null;
+  els.loginModal.classList.add('hidden');
+}
+
+els.loginCancel.addEventListener('click', closeLoginModal);
+els.loginBackdrop.addEventListener('click', closeLoginModal);
+
+els.loginSubmit.addEventListener('click', async () => {
+  const prompt = loginPrompt.current;
+  if (!prompt) return;
+
+  const username = els.loginUsername.value.trim();
+  const password = els.loginPassword.value;
+
+  if (!username || !password) {
+    els.loginStatus.textContent = 'Укажите логин и пароль.';
+    return;
+  }
+
+  els.loginSubmit.disabled = true;
+  els.loginStatus.textContent = 'Сохранение данных…';
+
+  try {
+    const loginUrlRaw = els.loginUrl.value.trim();
+    const payload = {
+      username,
+      password,
+    };
+    // Одноразовые SSO URL не отправляем вообще — иначе старые версии API
+    // или повторный вход с протухшим state ломают проверку.
+    if (loginUrlRaw && !isEphemeralLoginUrl(loginUrlRaw)) {
+      payload.loginUrl = loginUrlRaw;
+    }
+
+    await api(`/credentials/${encodeURIComponent(prompt.domain)}`, {
+      method: 'PUT',
+      jsonBody: payload,
+    });
+
+    els.loginStatus.textContent = 'Запуск повторной проверки…';
+    const job = await api('/jobs', { method: 'POST', jsonBody: { links: prompt.retryLinks } });
+    state.activeJobId = job.id;
+
+    closeLoginModal();
+    els.manualStatus.textContent = `Повторная проверка «${prompt.domain}» после входа запущена…`;
+    await syncActiveJobAndProgress();
+  } catch (error) {
+    els.loginSubmit.disabled = false;
+    els.loginStatus.textContent = `Ошибка: ${error.message}`;
+  }
+});
 
 // --- Проверить один раз ---
 

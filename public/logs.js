@@ -119,6 +119,11 @@ function loginNote(r) {
   return '—';
 }
 
+function formatErrorText(error) {
+  if (!error) return '';
+  return error.replace(/\u001b\[[0-9;]*m/g, '').split(/\n\s*\n/)[0].trim();
+}
+
 function escapeHtml(value) {
   const div = document.createElement('div');
   div.textContent = value;
@@ -207,7 +212,7 @@ function buildResultsTableHtml(results) {
         <td>${formatDuration(r.totalMs)}</td>
         <td>${r.passed ? '✅' : '❌'}</td>
         <td>${loginNote(r)}</td>
-        <td class="link-cell">${escapeHtml(r.error || '')}</td>
+        <td class="link-cell">${escapeHtml(formatErrorText(r.error))}</td>
       </tr>`,
     )
     .join('');

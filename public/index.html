@@ -62,6 +62,39 @@
     </section>
   </main>
 
+  <!-- Всплывающее окно входа: появляется, когда проверяемая ссылка требует
+       авторизации (HTTP 403 или вместо страницы показана форма логина). -->
+  <div id="login-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-backdrop" id="login-backdrop"></div>
+    <div class="modal-dialog login-dialog">
+      <h3>Требуется вход</h3>
+      <p id="login-modal-info" class="hint"></p>
+      <div class="login-form">
+        <label>
+          Сайт (домен)
+          <input type="text" id="login-domain" readonly />
+        </label>
+        <label>
+          Адрес страницы входа
+          <input type="text" id="login-url" placeholder="оставьте пустым, если форма входа уже на проверяемой странице" />
+        </label>
+        <label>
+          Логин
+          <input type="text" id="login-username" autocomplete="off" />
+        </label>
+        <label>
+          Пароль
+          <input type="password" id="login-password" autocomplete="off" />
+        </label>
+      </div>
+      <p id="login-modal-status" class="status-text"></p>
+      <div class="actions modal-actions">
+        <button id="login-cancel" class="danger">Пропустить</button>
+        <button id="login-submit">Войти и проверить снова</button>
+      </div>
+    </div>
+  </div>
+
   <script src="app.js"></script>
 </body>
 </html>

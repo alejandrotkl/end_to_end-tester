@@ -7,7 +7,8 @@
     "test": "tsx src/run.ts",
     "test:file": "tsx src/run.ts --file",
     "server": "tsx src/server.ts",
-    "server:dev": "tsx watch src/server.ts"
+    "server:dev": "tsx watch src/server.ts",
+    "demo:protected": "tsx scripts/protected-demo.ts"
   },
   "keywords": [
     "playwright",

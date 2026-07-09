@@ -30,19 +30,16 @@ function isYes(answer: string): boolean {
 }
 
 export async function promptForCredential(domain: string): Promise<DomainCredential | undefined> {
-  console.log(`\nСайт «${domain}» вернул HTTP 403 (доступ запрещён без входа).`);
+  console.log(`\nСайт «${domain}» требует вход (HTTP 403 или показана форма логина).`);
   const wantsLogin = await ask('Ввести данные для входа и повторить проверку? (y/n): ');
 
   if (!isYes(wantsLogin)) {
     return undefined;
   }
 
-  const loginUrl = await ask(`Адрес страницы входа для ${domain} (например, https://${domain}/login): `);
-
-  if (!loginUrl) {
-    console.log('Адрес страницы входа не указан, вход выполнить не удастся.');
-    return undefined;
-  }
+  const loginUrl = await ask(
+    `Адрес страницы входа для ${domain} (Enter — если форма входа показывается прямо на проверяемой странице): `,
+  );
 
   const username = await ask('Логин: ');
   const password = await ask('Пароль: ');
@@ -52,5 +49,5 @@ export async function promptForCredential(domain: string): Promise<DomainCredent
     return undefined;
   }
 
-  return { domain, loginUrl, username, password };
+  return { domain, loginUrl: loginUrl || undefined, username, password };
 }

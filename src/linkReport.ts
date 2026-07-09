@@ -1,6 +1,17 @@
 import { appendFileSync, mkdirSync, writeFileSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 
+export function stripAnsi(text: string): string {
+  return text.replace(/\u001b\[[0-9;]*m/g, '');
+}
+
+/** Убирает служебный diff Playwright из текста ошибки — оставляет понятное сообщение. */
+export function simplifyErrorMessage(text: string): string {
+  const cleaned = stripAnsi(text).trim();
+  const firstBlock = cleaned.split(/\n\s*\n/)[0]?.trim();
+  return firstBlock || cleaned;
+}
+
 export interface LinkResult {
   url: string;
   status: number | null;
@@ -8,10 +19,14 @@ export interface LinkResult {
   totalMs: number;
   passed: boolean;
   error?: string;
-  /** Страница ответила HTTP 403, и для её домена была выполнена попытка входа. */
+  /** Страница требовала вход (HTTP 403 или форма логина), и была выполнена попытка входа. */
   usedLogin?: boolean;
-  /** Страница ответила HTTP 403, но данные для входа по домену не настроены. */
+  /** Страница требует вход (HTTP 403 или форма логина), но данные для домена не настроены. */
   needsLogin?: boolean;
+  /** Домен, для которого нужен/использовался вход — веб-интерфейс показывает по нему окно ввода данных. */
+  loginDomain?: string;
+  /** Адрес обнаруженной страницы входа — подставляется в окно ввода данных как loginUrl по умолчанию. */
+  loginPageUrl?: string;
   /** Порядковый номер ссылки в списке на момент проверки (её приоритет — чем меньше, тем раньше). */
   priority?: number;
   /** Таймаут, с которым проверялась именно эта ссылка (мс) — совпадает с общим, если не задан свой. */

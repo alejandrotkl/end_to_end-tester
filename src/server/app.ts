@@ -439,16 +439,23 @@ export function createApp() {
     const domain = normalizeDomain(routeParam(req, 'domain'));
     const body = (req.body ?? {}) as Record<string, unknown>;
 
-    const loginUrl = typeof body.loginUrl === 'string' ? body.loginUrl : undefined;
-    const username = typeof body.username === 'string' ? body.username : undefined;
+    const loginUrlRaw = typeof body.loginUrl === 'string' ? body.loginUrl.trim() : '';
+    // Пустая строка и одноразовые OAuth/SSO URL (state) не сохраняем —
+    // при следующей проверке тестер возьмёт свежий редирект со страницы.
+    const loginUrl =
+      loginUrlRaw && !/[?&](state|bo)=|\/blitz\/|openid-connect\/auth/i.test(loginUrlRaw)
+        ? loginUrlRaw
+        : undefined;
+    const username = typeof body.username === 'string' ? body.username.trim() : undefined;
     const password = typeof body.password === 'string' ? body.password : undefined;
     const usernameSelector = typeof body.usernameSelector === 'string' ? body.usernameSelector : undefined;
     const passwordSelector = typeof body.passwordSelector === 'string' ? body.passwordSelector : undefined;
     const submitSelector = typeof body.submitSelector === 'string' ? body.submitSelector : undefined;
 
-    if (!loginUrl || !username || !password) {
+    if (!username || !password) {
       res.status(400).json({
-        error: 'Нужно передать строки loginUrl, username и password.',
+        error:
+          'Нужно передать строки username и password. Поле «Адрес страницы входа» необязательно — для SSO (Keycloak/Blitz) оставьте его пустым.',
       });
       return;
     }
