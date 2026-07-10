@@ -1,0 +1,32 @@
+{
+  "name": "playwright-link-tester",
+  "version": "1.0.0",
+  "description": "End-to-end link testing with Playwright",
+  "type": "module",
+  "scripts": {
+    "test": "tsx src/run.ts",
+    "test:file": "tsx src/run.ts --file",
+    "server": "tsx src/server.ts",
+    "server:dev": "tsx watch src/server.ts",
+    "demo:protected": "tsx scripts/protected-demo.ts"
+  },
+  "keywords": [
+    "playwright",
+    "e2e",
+    "testing"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.2.0",
+    "@types/node": "^26.1.0",
+    "tsx": "^4.23.0",
+    "typescript": "^5.9.0"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "multer": "^2.2.0"
+  }
+}

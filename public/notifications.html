@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Уведомления — Playwright Link Tester</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="theme.js"></script>
+</head>
+<body>
+  <header>
+    <h1>Playwright Link Tester</h1>
+    <nav class="nav-links">
+      <a href="/" class="nav-link">Проверка</a>
+      <a href="/logs.html" class="nav-link">Логи задач</a>
+      <a href="/credentials.html" class="nav-link">Доступы для входа</a>
+      <a href="/notifications.html" class="nav-link active">Уведомления</a>
+    </nav>
+    <div class="key-row">
+      <label for="api-key">API-ключ</label>
+      <input type="password" id="api-key" placeholder="X-API-Key" autocomplete="off" />
+      <button id="save-key">Сохранить</button>
+      <span id="key-status" class="status-text"></span>
+      <button type="button" id="theme-toggle" class="theme-switch" aria-label="Переключить тему">
+        <span class="theme-switch-track" aria-hidden="true">
+          <span class="theme-switch-icon theme-switch-sun">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+          </span>
+          <span class="theme-switch-icon theme-switch-moon">
+            <svg viewBox="0 0 24 24"><path d="M21 14.5A8.5 8.5 0 0 1 9.5 3 7 7 0 1 0 21 14.5z"/></svg>
+          </span>
+        </span>
+        <span class="theme-switch-knob" aria-hidden="true"></span>
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <section id="error-box" class="error-box hidden"></section>
+    <section id="status-box" class="status-banner hidden"></section>
+
+    <section class="card">
+      <h2>Telegram-бот для уведомлений</h2>
+      <p class="hint">
+        Бот пришлёт администратору сообщение, если задача не выполнилась целиком (сбой Playwright)
+        или если часть проверенных ссылок не прошла проверку — с кратким описанием ошибки по каждой
+        из первых нескольких ссылок. Настройки хранятся на сервере отдельно для каждого API-ключа.
+      </p>
+      <ol class="hint">
+        <li>Создайте бота через <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a> и скопируйте токен.</li>
+        <li>Напишите боту любое сообщение (или добавьте его в нужный чат/канал).</li>
+        <li>
+          Узнайте chat id — например, откройте
+          <code>https://api.telegram.org/bot&lt;ТОКЕН&gt;/getUpdates</code> после сообщения боту
+          и найдите поле <code>chat.id</code>.
+        </li>
+      </ol>
+
+      <form id="notif-form" class="cred-entry-form">
+        <div class="cred-form">
+          <label>
+            Токен бота
+            <input
+              type="password"
+              id="notif-token"
+              placeholder="123456789:AA...  (оставьте пустым, чтобы не менять)"
+              autocomplete="off"
+            />
+          </label>
+          <label>
+            Chat ID
+            <input type="text" id="notif-chat-id" placeholder="например, 123456789" autocomplete="off" />
+          </label>
+        </div>
+
+        <label class="notif-enabled-row">
+          <input type="checkbox" id="notif-enabled" />
+          Уведомления включены
+        </label>
+
+        <div class="actions">
+          <button type="submit" id="notif-save">Сохранить</button>
+          <button type="button" id="notif-test" class="secondary">Отправить тестовое сообщение</button>
+          <button type="button" id="notif-delete" class="danger small-btn">Удалить настройки</button>
+        </div>
+        <p id="notif-form-status" class="status-text"></p>
+      </form>
+    </section>
+  </main>
+
+  <script src="notifications.js"></script>
+</body>
+</html>
