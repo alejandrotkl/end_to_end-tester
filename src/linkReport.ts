@@ -1,5 +1,6 @@
 import { appendFileSync, mkdirSync, writeFileSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
+import type { LinkRequireCondition } from './loadLinks.js';
 
 export function stripAnsi(text: string): string {
   return text.replace(/\u001b\[[0-9;]*m/g, '');
@@ -17,6 +18,8 @@ export interface LinkResult {
   status: number | null;
   loadMs: number;
   totalMs: number;
+  /** Время попытки входа (мс), если был usedLogin. */
+  loginMs?: number;
   passed: boolean;
   error?: string;
   /** Страница требовала вход (HTTP 403 или форма логина), и была выполнена попытка входа. */
@@ -25,12 +28,16 @@ export interface LinkResult {
   needsLogin?: boolean;
   /** Домен, для которого нужен/использовался вход — веб-интерфейс показывает по нему окно ввода данных. */
   loginDomain?: string;
+  /** Логин учётной записи этой попытки. */
+  loginUsername?: string;
   /** Адрес обнаруженной страницы входа — подставляется в окно ввода данных как loginUrl по умолчанию. */
   loginPageUrl?: string;
   /** Порядковый номер ссылки в списке на момент проверки (её приоритет — чем меньше, тем раньше). */
   priority?: number;
   /** Таймаут, с которым проверялась именно эта ссылка (мс) — совпадает с общим, если не задан свой. */
   timeoutMs?: number;
+  /** Доп. условия успеха, заданные для ссылки. */
+  require?: LinkRequireCondition[];
 }
 
 // LOG_DIR можно переопределить переменной окружения — так API-сервер
@@ -41,17 +48,61 @@ export const LOG_FILE = join(LOG_DIR, 'links.log');
 export const RESULTS_JSON_FILE = join(LOG_DIR, 'results.json');
 export const PROGRESS_JSON_FILE = join(LOG_DIR, 'progress.json');
 
+/** Краткое описание доп. условий для лога и UI. */
+export function formatRequireNote(require?: LinkRequireCondition[]): string {
+  if (!Array.isArray(require) || require.length === 0) {
+    return '';
+  }
+
+  return require
+    .map((condition, index) => {
+      if (
+        condition.kind === 'element' ||
+        condition.path ||
+        condition.tag ||
+        condition.classes ||
+        condition.text
+      ) {
+        const parts: string[] = [];
+        if (condition.path) parts.push(`внутри=${condition.path}`);
+        if (condition.tag) parts.push(`элемент=${condition.tag}`);
+        if (condition.classes) parts.push(`class=${condition.classes}`);
+        if (condition.text) parts.push(`текст=${condition.text}`);
+        return parts.length ? `[${index + 1}] ${parts.join('; ')}` : '';
+      }
+      if (condition.kind === 'selector' && condition.value) {
+        return `[${index + 1}] селектор=${condition.value}`;
+      }
+      if (condition.kind === 'text' && condition.value) {
+        return `[${index + 1}] текст=${condition.value}`;
+      }
+      return '';
+    })
+    .filter(Boolean)
+    .join(', ');
+}
+
 function formatLine(result: LinkResult): string {
   const status = result.status ?? 'нет ответа';
   const outcome = result.passed ? 'УСПЕХ' : 'ОШИБКА';
-  const loginNote = result.usedLogin
-    ? ' | вход выполнен'
-    : result.needsLogin
-      ? ' | ТРЕБУЕТСЯ ВХОД (данные не настроены)'
-      : '';
+  let loginNote = '';
+  if (result.usedLogin) {
+    loginNote = ' | вход выполнен';
+    if (result.loginMs !== undefined) {
+      loginNote += ` (${result.loginMs} мс)`;
+    }
+    if (result.loginUsername) {
+      loginNote += `, логин=${result.loginUsername}`;
+    }
+  } else if (result.needsLogin) {
+    loginNote = ' | ТРЕБУЕТСЯ ВХОД (данные не настроены)';
+  }
+
+  const requireNote = formatRequireNote(result.require);
+  const requirePart = requireNote ? ` | доп. условия: ${requireNote}` : '';
 
   let line =
-    `[${outcome}] ${result.url} | HTTP ${status} | загрузка: ${result.loadMs} мс | всего: ${result.totalMs} мс${loginNote}`;
+    `[${outcome}] ${result.url} | HTTP ${status} | загрузка: ${result.loadMs} мс | всего: ${result.totalMs} мс${loginNote}${requirePart}`;
 
   if (result.error) {
     line += ` | ${result.error}`;

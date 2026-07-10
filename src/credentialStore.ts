@@ -14,7 +14,14 @@
  * в Git (см. .gitignore) и должен быть доступен только на сервере.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 
 export interface DomainCredential {
@@ -59,6 +66,49 @@ function writeStore(filePath: string, store: Record<string, DomainCredential>): 
   writeFileSync(filePath, JSON.stringify(store, null, 2), 'utf-8');
 }
 
+/** Папка sessions/ рядом с файлом credentials — кеш куки после успешного входа. */
+function sessionsDirFor(credentialsFilePath: string): string {
+  return join(dirname(credentialsFilePath), 'sessions');
+}
+
+/**
+ * Удаляет файлы сессии для домена (и безопасные варианты имени файла).
+ * Вызывается при сохранении/удалении учётных данных, чтобы не подставлять
+ * старые куки после смены логина/пароля.
+ */
+export function deleteDomainSessions(credentialsFilePath: string, domain: string): void {
+  const sessionsDir = sessionsDirFor(credentialsFilePath);
+  if (!existsSync(sessionsDir)) {
+    return;
+  }
+
+  const safe = domain.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const candidates = new Set([
+    `${safe}.json`,
+    `${domain}.json`,
+    `${domain.replace(/[^a-zA-Z0-9._-]/g, '_')}.json`,
+  ]);
+
+  try {
+    for (const name of readdirSync(sessionsDir)) {
+      const base = name.toLowerCase();
+      const match =
+        candidates.has(name) ||
+        [...candidates].some((c) => c.toLowerCase() === base) ||
+        base === `${safe.toLowerCase()}.json`;
+      if (match) {
+        try {
+          unlinkSync(join(sessionsDir, name));
+        } catch {
+          // файл мог исчезнуть параллельно
+        }
+      }
+    }
+  } catch {
+    // нет доступа к папке — не мешаем сохранению credentials
+  }
+}
+
 export function getDomainCredential(filePath: string, domain: string): DomainCredential | undefined {
   return readStore(filePath)[domain];
 }
@@ -71,6 +121,7 @@ export function saveDomainCredential(filePath: string, credential: DomainCredent
   const store = readStore(filePath);
   store[credential.domain] = credential;
   writeStore(filePath, store);
+  deleteDomainSessions(filePath, credential.domain);
 }
 
 export function deleteDomainCredential(filePath: string, domain: string): boolean {
@@ -82,5 +133,6 @@ export function deleteDomainCredential(filePath: string, domain: string): boolea
 
   delete store[domain];
   writeStore(filePath, store);
+  deleteDomainSessions(filePath, domain);
   return true;
 }

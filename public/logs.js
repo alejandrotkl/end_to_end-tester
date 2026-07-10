@@ -114,7 +114,16 @@ function rankBadge(priority) {
 }
 
 function loginNote(r) {
-  if (r.usedLogin) return '<span class="hint">вход выполнен</span>';
+  if (r.usedLogin) {
+    let text = 'вход выполнен';
+    if (r.loginMs !== undefined && r.loginMs !== null) {
+      text += ` (${formatDuration(r.loginMs)})`;
+    }
+    if (r.loginUsername) {
+      text += `, ${escapeHtml(r.loginUsername)}`;
+    }
+    return `<span class="hint">${text}</span>`;
+  }
   if (r.needsLogin) return '<span class="hint" style="color:var(--danger)">требуется вход</span>';
   return '—';
 }
@@ -124,9 +133,34 @@ function formatErrorText(error) {
   return error.replace(/\u001b\[[0-9;]*m/g, '').split(/\n\s*\n/)[0].trim();
 }
 
+function formatRequireNote(require) {
+  if (!Array.isArray(require) || require.length === 0) return '—';
+
+  return require
+    .map((condition, index) => {
+      if (condition.kind === 'element' || condition.path || condition.tag || condition.classes || condition.text) {
+        const parts = [];
+        if (condition.path) parts.push(`внутри=${condition.path}`);
+        if (condition.tag) parts.push(`элемент=${condition.tag}`);
+        if (condition.classes) parts.push(`class=${condition.classes}`);
+        if (condition.text) parts.push(`текст=${condition.text}`);
+        return parts.length ? `[${index + 1}] ${parts.join('; ')}` : '';
+      }
+      if (condition.kind === 'selector' && condition.value) {
+        return `[${index + 1}] селектор=${condition.value}`;
+      }
+      if (condition.kind === 'text' && condition.value) {
+        return `[${index + 1}] текст=${condition.value}`;
+      }
+      return '';
+    })
+    .filter(Boolean)
+    .join(', ') || '—';
+}
+
 function escapeHtml(value) {
   const div = document.createElement('div');
-  div.textContent = value;
+  div.textContent = value == null ? '' : String(value);
   return div.innerHTML;
 }
 
@@ -210,6 +244,7 @@ function buildResultsTableHtml(results) {
         <td>${r.status ?? '—'}</td>
         <td>${formatDuration(r.loadMs)}</td>
         <td>${formatDuration(r.totalMs)}</td>
+        <td class="link-cell">${escapeHtml(formatRequireNote(r.require))}</td>
         <td>${r.passed ? '✅' : '❌'}</td>
         <td>${loginNote(r)}</td>
         <td class="link-cell">${escapeHtml(formatErrorText(r.error))}</td>
@@ -223,10 +258,10 @@ function buildResultsTableHtml(results) {
       <table class="job-results-table">
         <thead>
           <tr>
-            <th>Ссылка</th><th>№</th><th>HTTP</th><th>Загрузка</th><th>Всего</th><th>Итог</th><th>Вход</th><th>Описание ошибки</th>
+            <th>Ссылка</th><th>№</th><th>HTTP</th><th>Загрузка</th><th>Всего</th><th>Доп. условия</th><th>Итог</th><th>Вход</th><th>Описание ошибки</th>
           </tr>
         </thead>
-        <tbody>${rows || '<tr><td colspan="8">Нет результатов.</td></tr>'}</tbody>
+        <tbody>${rows || '<tr><td colspan="9">Нет результатов.</td></tr>'}</tbody>
       </table>
     </div>`;
 }

@@ -1,7 +1,13 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
-import { DEFAULT_LINK_TIMEOUT_MS, loadLinks } from '../src/loadLinks.js';
+import {
+  DEFAULT_LINK_TIMEOUT_MS,
+  loadLinks,
+  parseClassList,
+  parseElementPath,
+  type LinkRequireCondition,
+} from '../src/loadLinks.js';
 import { logLinkResult, simplifyErrorMessage, type LinkResult } from '../src/linkReport.js';
 import {
   credentialsFilePathFromEnv,
@@ -380,8 +386,256 @@ function findCredentialForUrl(credentialsPath: string, url: string): DomainCrede
   return undefined;
 }
 
+/**
+ * Доп. условия: сначала находим элемент по (путь + тег + class),
+ * затем текст сравниваем ТОЛЬКО с прямым текстом этого узла.
+ * Никакого page.getByText / поиска строки по document.
+ */
+async function assertRequireConditions(
+  page: Page,
+  url: string,
+  require: LinkRequireCondition[] | undefined,
+  timeoutMs: number,
+): Promise<void> {
+  if (!require?.length) {
+    return;
+  }
+
+  const waitMs = Math.min(Math.max(timeoutMs, 1_000), 15_000);
+
+  for (const [index, condition] of require.entries()) {
+    const label = `доп. условие #${index + 1}`;
+
+    if (condition.kind === 'selector' && condition.value) {
+      await expect(
+        page.locator(condition.value).first(),
+        `${label} для ${url}: не найден элемент по селектору «${condition.value}»`,
+      ).toBeVisible({ timeout: waitMs });
+      continue;
+    }
+
+    // Legacy kind=text — оставляем, но element-условия ниже его не используют.
+    if (condition.kind === 'text' && condition.value) {
+      await expect(
+        page.getByText(condition.value, { exact: true }).first(),
+        `${label} для ${url}: на странице нет текста «${condition.value}»`,
+      ).toBeVisible({ timeout: waitMs });
+      continue;
+    }
+
+    const classNames = condition.classes ? parseClassList(condition.classes) : [];
+    const needle = (condition.text || '').trim();
+    const tagName = (condition.tag || '').trim().toLowerCase();
+    const pathTags = condition.path ? parseElementPath(condition.path) : [];
+
+    if (needle && classNames.length === 0) {
+      expect(
+        false,
+        `${label} для ${url}: укажите «Классы» — текст проверяется только у элемента с этими class.`,
+      ).toBe(true);
+      continue;
+    }
+
+    if (!classNames.length && !tagName && pathTags.length === 0) {
+      expect(false, `${label} для ${url}: укажите «Внутри», «Элемент» или «Классы».`).toBe(true);
+      continue;
+    }
+
+    const describe =
+      [
+        pathTags.length ? `внутри=${pathTags.join(' ')}` : '',
+        tagName ? `элемент=${tagName}` : '',
+        classNames.length ? `class=(${classNames.length} шт.)` : '',
+        needle ? `текст=${needle}` : '',
+      ]
+        .filter(Boolean)
+        .join(', ') || 'элемент';
+
+    const deadline = Date.now() + waitMs;
+    let lastInfo = {
+      candidateCount: 0,
+      visibleCount: 0,
+      visibleTexts: [] as string[],
+    };
+
+    let found = false;
+
+    while (Date.now() <= deadline) {
+      // Ищем через classList.contains (не длинный CSS) — иначе Tailwind
+      // вроде !w-[var(--tablet-width)] даёт 0 совпадений в querySelector.
+      const info = await page.evaluate(
+        ({ pathTags: path, tagName: tag, classNames: classes, needle: textNeedle }) => {
+          const normalize = (value: string) => value.replace(/\s+/g, ' ').trim();
+
+          const directText = (el: Element): string => {
+            let text = '';
+            for (const node of Array.from(el.childNodes)) {
+              if (node.nodeType === Node.TEXT_NODE) {
+                text += node.textContent || '';
+              }
+            }
+            return normalize(text);
+          };
+
+          const hasPath = (el: Element): boolean => {
+            if (path.length === 0) {
+              return true;
+            }
+            const ancestors: string[] = [];
+            let node: Element | null = el.parentElement;
+            while (node) {
+              ancestors.push(node.tagName.toLowerCase());
+              node = node.parentElement;
+            }
+            let from = 0;
+            for (const pathTag of [...path].reverse()) {
+              const idx = ancestors.indexOf(pathTag, from);
+              if (idx === -1) {
+                return false;
+              }
+              from = idx + 1;
+            }
+            return true;
+          };
+
+          const onScreen = (el: Element): boolean => {
+            if (!(el instanceof HTMLElement)) {
+              return false;
+            }
+            let node: HTMLElement | null = el;
+            while (node) {
+              const style = window.getComputedStyle(node);
+              if (
+                style.display === 'none' ||
+                style.visibility === 'hidden' ||
+                Number.parseFloat(style.opacity || '1') === 0
+              ) {
+                return false;
+              }
+              node = node.parentElement;
+            }
+            const rect = el.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) {
+              return false;
+            }
+            if (
+              rect.bottom <= 0 ||
+              rect.right <= 0 ||
+              rect.top >= window.innerHeight ||
+              rect.left >= window.innerWidth
+            ) {
+              return false;
+            }
+            let parent = el.parentElement;
+            while (parent) {
+              const ps = window.getComputedStyle(parent);
+              if (/(auto|scroll|hidden)/.test(ps.overflowX) || /(auto|scroll|hidden)/.test(ps.overflowY)) {
+                const pr = parent.getBoundingClientRect();
+                const overlaps =
+                  rect.bottom > pr.top + 1 &&
+                  rect.top < pr.bottom - 1 &&
+                  rect.right > pr.left + 1 &&
+                  rect.left < pr.right - 1;
+                if (!overlaps) {
+                  return false;
+                }
+              }
+              parent = parent.parentElement;
+            }
+            return true;
+          };
+
+          const pool = Array.from(document.querySelectorAll(tag || '*'));
+          const candidates = pool.filter((el) => {
+            if (tag && el.tagName.toLowerCase() !== tag) {
+              return false;
+            }
+            if (classes.length > 0 && !classes.every((cls) => el.classList.contains(cls))) {
+              return false;
+            }
+            if (!hasPath(el)) {
+              return false;
+            }
+            return true;
+          });
+
+          const visibleTexts: string[] = [];
+          let visibleCount = 0;
+
+          for (const el of candidates) {
+            if (!onScreen(el)) {
+              continue;
+            }
+            visibleCount += 1;
+            const own = directText(el);
+            visibleTexts.push(own === '' ? '(пусто)' : own);
+
+            if (textNeedle) {
+              if (own === normalize(textNeedle)) {
+                return {
+                  found: true,
+                  candidateCount: candidates.length,
+                  visibleCount,
+                  visibleTexts: visibleTexts.slice(0, 20),
+                };
+              }
+            } else {
+              return {
+                found: true,
+                candidateCount: candidates.length,
+                visibleCount,
+                visibleTexts: visibleTexts.slice(0, 20),
+              };
+            }
+          }
+
+          return {
+            found: false,
+            candidateCount: candidates.length,
+            visibleCount,
+            visibleTexts: visibleTexts.slice(0, 20),
+          };
+        },
+        {
+          pathTags,
+          tagName,
+          classNames,
+          needle,
+        },
+      );
+
+      lastInfo = {
+        candidateCount: info.candidateCount,
+        visibleCount: info.visibleCount,
+        visibleTexts: info.visibleTexts,
+      };
+
+      if (info.found) {
+        found = true;
+        break;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+
+    const textsNote =
+      lastInfo.visibleTexts.length > 0
+        ? ` Видимые тексты: ${lastInfo.visibleTexts.join(', ')}.`
+        : '';
+
+    expect(
+      found,
+      `${label} для ${url}: не найден видимый элемент (${describe})` +
+        (needle ? ` с текстом «${needle}»` : '') +
+        ` (кандидатов: ${lastInfo.candidateCount}, видимых: ${lastInfo.visibleCount}).` +
+        textsNote,
+    ).toBe(true);
+  }
+}
+
+
 for (const linkInput of links) {
-  const { url, priority, timeoutMs } = linkInput;
+  const { url, priority, timeoutMs, require } = linkInput;
 
   test(`проверка ссылки: ${url}`, async ({ page }, testInfo) => {
     testInfo.setTimeout(Math.max(timeoutMs * 2 + 60_000, DEFAULT_LINK_TIMEOUT_MS + 60_000));
@@ -395,6 +649,8 @@ for (const linkInput of links) {
     let needsLogin = false;
     let loginDomain: string | undefined;
     let loginPageUrl: string | undefined;
+    let loginMs: number | undefined;
+    let loginUsername: string | undefined;
     const consoleErrors: string[] = [];
     const domain = new URL(url).hostname;
 
@@ -458,12 +714,16 @@ for (const linkInput of links) {
 
         if (cred) {
           usedLogin = true;
+          loginUsername = cred.username;
 
           try {
+            const loginStart = performance.now();
             const loginInfo = await attemptLogin(page, cred);
+            loginMs = Math.round(performance.now() - loginStart);
             console.log(
               `[вход] ${domain}: страница после отправки формы — ${loginInfo.urlAfterSubmit}` +
-                (loginInfo.likelyFailed ? ' (адрес не изменился, вход мог не выполниться)' : ''),
+                (loginInfo.likelyFailed ? ' (адрес не изменился, вход мог не выполниться)' : '') +
+                ` (${loginMs} мс)`,
             );
 
             // Если после входа уже на целевой странице — повторный goto не нужен.
@@ -536,6 +796,8 @@ for (const linkInput of links) {
         `Пустой заголовок страницы (title) для ${url}`,
       ).toBeGreaterThan(0);
 
+      await assertRequireConditions(page, url, require, timeoutMs);
+
       if (checkConsoleErrors) {
         expect(
           consoleErrors,
@@ -562,8 +824,11 @@ for (const linkInput of links) {
         needsLogin,
         loginDomain,
         loginPageUrl,
+        loginMs,
+        loginUsername,
         priority,
         timeoutMs,
+        require,
       };
 
       logLinkResult(result);

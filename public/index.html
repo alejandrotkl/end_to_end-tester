@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Playwright Link Tester</title>
+  <script src="theme.js"></script>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -12,17 +13,39 @@
     <nav class="nav-links">
       <a href="/" class="nav-link active">Проверка</a>
       <a href="/logs.html" class="nav-link">Логи задач</a>
+      <a href="/credentials.html" class="nav-link">Доступы для входа</a>
     </nav>
     <div class="key-row">
       <label for="api-key">API-ключ</label>
       <input type="password" id="api-key" placeholder="X-API-Key" autocomplete="off" />
       <button id="save-key">Сохранить</button>
       <span id="key-status" class="status-text"></span>
+      <button type="button" id="theme-toggle" class="theme-switch" aria-label="Переключить тему">
+        <span class="theme-switch-track" aria-hidden="true">
+          <span class="theme-switch-icon theme-switch-sun">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+          </span>
+          <span class="theme-switch-icon theme-switch-moon">
+            <svg viewBox="0 0 24 24"><path d="M21 14.5A8.5 8.5 0 0 1 9.5 3 7 7 0 1 0 21 14.5z"/></svg>
+          </span>
+        </span>
+        <span class="theme-switch-knob" aria-hidden="true"></span>
+      </button>
     </div>
   </header>
 
   <main>
     <section id="error-box" class="error-box hidden"></section>
+
+    <section id="login-needed-banner" class="card login-needed-banner hidden">
+      <h2>Требуется вход</h2>
+      <p id="login-needed-text" class="hint"></p>
+      <ul id="login-needed-list" class="login-needed-list"></ul>
+      <div class="actions">
+        <a id="login-needed-link" class="button-link" href="/credentials.html">Открыть доступы для входа</a>
+        <button type="button" id="login-needed-dismiss" class="secondary small-btn">Скрыть</button>
+      </div>
+    </section>
 
     <section class="card">
       <h2>Проверка ссылок</h2>
@@ -61,39 +84,6 @@
       <div id="progress-results"></div>
     </section>
   </main>
-
-  <!-- Всплывающее окно входа: появляется, когда проверяемая ссылка требует
-       авторизации (HTTP 403 или вместо страницы показана форма логина). -->
-  <div id="login-modal" class="modal hidden" role="dialog" aria-modal="true">
-    <div class="modal-backdrop" id="login-backdrop"></div>
-    <div class="modal-dialog login-dialog">
-      <h3>Требуется вход</h3>
-      <p id="login-modal-info" class="hint"></p>
-      <div class="login-form">
-        <label>
-          Сайт (домен)
-          <input type="text" id="login-domain" readonly />
-        </label>
-        <label>
-          Адрес страницы входа
-          <input type="text" id="login-url" placeholder="оставьте пустым, если форма входа уже на проверяемой странице" />
-        </label>
-        <label>
-          Логин
-          <input type="text" id="login-username" autocomplete="off" />
-        </label>
-        <label>
-          Пароль
-          <input type="password" id="login-password" autocomplete="off" />
-        </label>
-      </div>
-      <p id="login-modal-status" class="status-text"></p>
-      <div class="actions modal-actions">
-        <button id="login-cancel" class="danger">Пропустить</button>
-        <button id="login-submit">Войти и проверить снова</button>
-      </div>
-    </div>
-  </div>
 
   <script src="app.js"></script>
 </body>

@@ -6,17 +6,19 @@
  * пробрасываются построчно с префиксом [job <id>]. Строки вида
  * [УСПЕХ]/[ОШИБКА] пишет logLinkResult / russianReporter в дочернем процессе.
  *
- * Запуск: node <cli.js> test без shell (кроссплатформенно; на Windows
- * надёжнее, чем npx + shell: true).
+ * Запуск: npx playwright test через shell (кроссплатформенно; на Windows
+ * надёжнее, чем spawn без shell).
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { isAbsolute, resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { isAbsolute, join, resolve } from 'node:path';
+import type { LinkRequireCondition } from '../loadLinks.js';
 import { credentialsFileFor } from './credentialStore.js';
 import {
   getJob,
   jobDirFor,
+  progressFileFor,
   resultsFileFor,
   updateJob,
   type Job,
@@ -32,7 +34,50 @@ function absolutePath(path: string): string {
 interface QueueEntry {
   jobId: string;
   linksFile: string;
+  /** Если задано — повторная проверка: LOG_DIR = recheckDir, результаты мержатся в основную задачу. */
+  recheckDir?: string;
   onComplete?: (job: Job | undefined) => void;
+}
+
+export interface RecheckLinkInput {
+  url: string;
+  timeoutMs?: number;
+  require?: LinkRequireCondition[];
+}
+
+/** Строка результата в progress/results — может содержать доп. поля от теста. */
+export interface LinkResultRow {
+  url: string;
+  status: number | null;
+  loadMs: number;
+  totalMs: number;
+  passed: boolean;
+  error?: string;
+  usedLogin?: boolean;
+  needsLogin?: boolean;
+  loginDomain?: string;
+  loginPageUrl?: string;
+  loginMs?: number;
+  loginUsername?: string;
+  priority?: number;
+  timeoutMs?: number;
+  require?: LinkRequireCondition[];
+}
+
+interface ProgressFile {
+  total: number;
+  completed: number;
+  current: string | null;
+  results: LinkResultRow[];
+}
+
+interface ResultsFile {
+  total: number;
+  passed: number;
+  failed: number;
+  avgLoadMs: number;
+  avgTotalMs: number;
+  results: LinkResultRow[];
 }
 
 let activeCount = 0;
@@ -98,16 +143,107 @@ function pipeWithPrefix(jobId: string, stream: NodeJS.ReadableStream, asError = 
   });
 }
 
-function executeJob(jobId: string, linksFile: string): Promise<void> {
+function readJsonFile<T>(path: string): T | undefined {
+  if (!existsSync(path)) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(readFileSync(path, 'utf-8')) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+function summarizeResults(results: LinkResultRow[]): JobSummary {
+  const total = results.length;
+  const passed = results.filter((r) => r.passed).length;
+  const failed = total - passed;
+  const avgLoadMs =
+    total === 0 ? 0 : Math.round(results.reduce((sum, r) => sum + (r.loadMs || 0), 0) / total);
+  const avgTotalMs =
+    total === 0 ? 0 : Math.round(results.reduce((sum, r) => sum + (r.totalMs || 0), 0) / total);
+  return { total, passed, failed, avgLoadMs, avgTotalMs };
+}
+
+/**
+ * Подменяет в основном progress/results строки с теми же URL результатами
+ * повторной проверки (остальные ссылки задачи не трогаем).
+ */
+function mergeRecheckIntoJob(jobId: string, recheckDir: string): JobSummary | undefined {
+  const recheckResults = readJsonFile<ResultsFile>(join(recheckDir, 'results.json'));
+  const recheckProgress = readJsonFile<ProgressFile>(join(recheckDir, 'progress.json'));
+  const recheckRows =
+    recheckResults?.results ||
+    recheckProgress?.results ||
+    [];
+
+  if (recheckRows.length === 0) {
+    return undefined;
+  }
+
+  const byUrl = new Map(recheckRows.map((row) => [row.url, row]));
+
+  const mainProgressPath = progressFileFor(jobId);
+  const mainResultsPath = resultsFileFor(jobId);
+
+  const mainProgress = readJsonFile<ProgressFile>(mainProgressPath) || {
+    total: 0,
+    completed: 0,
+    current: null,
+    results: [],
+  };
+
+  mainProgress.results = (mainProgress.results || []).map((row) => byUrl.get(row.url) || row);
+  // Если URL не было в progress (редко) — добавим.
+  for (const row of recheckRows) {
+    if (!mainProgress.results.some((r) => r.url === row.url)) {
+      mainProgress.results.push(row);
+    }
+  }
+  mainProgress.completed = mainProgress.results.length;
+  mainProgress.current = null;
+  writeFileSync(mainProgressPath, JSON.stringify(mainProgress, null, 2), 'utf-8');
+
+  let mainResults = readJsonFile<ResultsFile>(mainResultsPath);
+  if (mainResults?.results) {
+    mainResults.results = mainResults.results.map((row) => byUrl.get(row.url) || row);
+    for (const row of recheckRows) {
+      if (!mainResults.results.some((r) => r.url === row.url)) {
+        mainResults.results.push(row);
+      }
+    }
+  } else {
+    mainResults = {
+      ...summarizeResults(mainProgress.results),
+      results: mainProgress.results,
+    };
+  }
+
+  const summary = summarizeResults(mainResults.results);
+  const merged: ResultsFile = { ...summary, results: mainResults.results };
+  writeFileSync(mainResultsPath, JSON.stringify(merged, null, 2), 'utf-8');
+  return summary;
+}
+
+function executeJob(jobId: string, linksFile: string, recheckDir?: string): Promise<void> {
   return new Promise((resolvePromise) => {
     const jobDir = jobDirFor(jobId);
     const apiKeyName = getJob(jobId)?.apiKeyName;
+    const isRecheck = Boolean(recheckDir);
+    const logDir = recheckDir || jobDir;
 
-    updateJob(jobId, { status: 'running', startedAt: new Date().toISOString() });
-    logJob(jobId, 'Запуск проверки ссылок...');
+    updateJob(jobId, {
+      status: 'running',
+      ...(isRecheck ? {} : { startedAt: new Date().toISOString() }),
+      error: undefined,
+    });
+    logJob(
+      jobId,
+      isRecheck ? 'Повторная проверка выбранных ссылок в этой же задаче...' : 'Запуск проверки ссылок...',
+    );
 
     const absLinksFile = absolutePath(linksFile);
-    const absJobDir = absolutePath(jobDir);
+    const absLogDir = absolutePath(logDir);
     const absCredentials = apiKeyName
       ? absolutePath(credentialsFileFor(apiKeyName))
       : undefined;
@@ -115,7 +251,7 @@ function executeJob(jobId: string, linksFile: string): Promise<void> {
     const childEnv: NodeJS.ProcessEnv = {
       ...process.env,
       LINKS_FILE: absLinksFile,
-      LOG_DIR: absJobDir,
+      LOG_DIR: absLogDir,
       ...(absCredentials ? { CREDENTIALS_FILE: absCredentials } : {}),
     };
     // Иначе Node пишет warning, если в окружении родителя уже есть FORCE_COLOR/NO_COLOR.
@@ -156,6 +292,36 @@ function executeJob(jobId: string, linksFile: string): Promise<void> {
     });
 
     child.on('close', (code) => {
+      if (isRecheck && recheckDir) {
+        const summary = mergeRecheckIntoJob(jobId, recheckDir);
+        if (summary) {
+          updateJob(jobId, {
+            status: 'completed',
+            finishedAt: new Date().toISOString(),
+            summary,
+            error: undefined,
+          });
+          logJob(
+            jobId,
+            `Повторная проверка завершена: всего ${summary.total}, успешно ${summary.passed}, ошибок ${summary.failed}.`,
+          );
+        } else {
+          const error =
+            stderrTail.trim() ||
+            (code === null
+              ? 'Повторная проверка завершилась без результатов.'
+              : `Повторная проверка завершилась с кодом ${code} без результатов.`);
+          updateJob(jobId, {
+            status: 'failed',
+            finishedAt: new Date().toISOString(),
+            error,
+          });
+          logJob(jobId, `Повторная проверка не выполнена: ${error}`, true);
+        }
+        resolvePromise();
+        return;
+      }
+
       const summary = readResultsSummary(jobId);
 
       if (summary) {
@@ -197,7 +363,7 @@ function pump(): void {
 
     activeCount += 1;
 
-    void executeJob(entry.jobId, entry.linksFile)
+    void executeJob(entry.jobId, entry.linksFile, entry.recheckDir)
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         updateJob(entry.jobId, { status: 'failed', finishedAt: new Date().toISOString(), error: message });
@@ -220,5 +386,37 @@ export function enqueueJob(
     `Принята задача от «${job.apiKeyName}»: ${job.totalLinks} ссылок(и). Постановка в очередь.`,
   );
   queue.push({ jobId: job.id, linksFile, onComplete });
+  pump();
+}
+
+/**
+ * Повторная проверка части ссылок внутри уже существующей задачи —
+ * после сохранения логина/пароля. Новая задача не создаётся: результаты
+ * подменяются по URL в progress/results исходной задачи.
+ */
+export function enqueueRecheck(
+  job: Job,
+  links: RecheckLinkInput[],
+  onComplete?: (job: Job | undefined) => void,
+): void {
+  const jobDir = jobDirFor(job.id);
+  const recheckDir = join(jobDir, `recheck-${Date.now()}`);
+  mkdirSync(recheckDir, { recursive: true });
+
+  const linksFile = join(recheckDir, 'input.json');
+  writeFileSync(linksFile, JSON.stringify({ links }, null, 2), 'utf-8');
+
+  logJob(
+    job.id,
+    `Повторная проверка ${links.length} ссылок(и) в той же задаче. Постановка в очередь.`,
+  );
+
+  updateJob(job.id, {
+    status: 'pending',
+    error: undefined,
+    finishedAt: undefined,
+  });
+
+  queue.push({ jobId: job.id, linksFile, recheckDir, onComplete });
   pump();
 }

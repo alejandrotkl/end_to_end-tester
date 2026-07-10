@@ -4,7 +4,7 @@ import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import multer from 'multer';
-import { loadLinks } from '../loadLinks.js';
+import { loadLinks, parseRequireConditions } from '../loadLinks.js';
 import { deleteDomainCredential, listDomainCredentials, saveDomainCredential } from '../credentialStore.js';
 import { findApiKeyOwner, loadApiKeys } from './apiKeys.js';
 import { credentialsFileFor } from './credentialStore.js';
@@ -18,7 +18,7 @@ import {
   progressFileFor,
   resultsFileFor,
 } from './jobStore.js';
-import { enqueueJob } from './jobRunner.js';
+import { enqueueJob, enqueueRecheck } from './jobRunner.js';
 import { getLinksDraft, saveLinksDraft, type DraftLink } from './linksDraftStore.js';
 import { configureSchedule, DEFAULT_SCHEDULE_INTERVAL_MS, stopSchedule, triggerScheduleNow } from './scheduler.js';
 import { getSchedule, scheduleDirFor } from './scheduleStore.js';
@@ -272,6 +272,65 @@ export function createApp() {
     res.status(204).send();
   });
 
+  // Повторная проверка части ссылок внутри уже существующей задачи —
+  // после сохранения логина/пароля. Новая задача не создаётся: результаты
+  // подменяются по URL в progress/results исходной задачи.
+  api.post('/jobs/:id/recheck', (req: Request, res: Response) => {
+    const job = getJob(idParam(req));
+
+    if (!job || job.apiKeyName !== req.apiKeyName) {
+      res.status(404).json({ error: 'Задача не найдена.' });
+      return;
+    }
+
+    if (job.status === 'pending' || job.status === 'running') {
+      res.status(409).json({ error: 'Задача ещё выполняется — дождитесь завершения перед повторной проверкой.' });
+      return;
+    }
+
+    const rawLinks = (req.body as { links?: unknown })?.links;
+    if (!Array.isArray(rawLinks) || rawLinks.length === 0) {
+      res.status(400).json({ error: 'Нужно передать непустой массив links.' });
+      return;
+    }
+
+    const links = rawLinks
+      .map((item) => {
+        if (typeof item === 'string') {
+          return { url: item };
+        }
+        if (item && typeof item === 'object' && typeof (item as { url?: unknown }).url === 'string') {
+          const row = item as { url: string; timeoutMs?: number; require?: unknown };
+          const require = parseRequireConditions(row.require);
+          return {
+            url: row.url,
+            timeoutMs: typeof row.timeoutMs === 'number' ? row.timeoutMs : undefined,
+            ...(require ? { require } : {}),
+          };
+        }
+        return null;
+      })
+      .filter((item): item is { url: string; timeoutMs?: number; require?: ReturnType<typeof parseRequireConditions> } =>
+        item !== null,
+      );
+
+    if (links.length === 0) {
+      res.status(400).json({ error: 'В links нет корректных ссылок.' });
+      return;
+    }
+
+    if (links.length > MAX_LINKS_PER_JOB) {
+      res.status(400).json({
+        error: `Слишком много ссылок: ${links.length}. Максимум: ${MAX_LINKS_PER_JOB}.`,
+      });
+      return;
+    }
+
+    enqueueRecheck(job, links);
+    const updated = getJob(job.id);
+    res.status(202).json(updated);
+  });
+
   // Плановые проверки: у каждого API-ключа может быть настроено одно
   // расписание (список ссылок + интервал повтора). PUT создаёт/обновляет
   // его и сразу выполняет первую проверку; дальше сервер сам повторяет
@@ -415,10 +474,14 @@ export function createApp() {
     const links: DraftLink[] = rawLinks
       .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
       .filter((item) => typeof item.url === 'string')
-      .map((item) => ({
-        url: item.url as string,
-        timeoutMs: typeof item.timeoutMs === 'number' ? item.timeoutMs : undefined,
-      }));
+      .map((item) => {
+        const require = parseRequireConditions(item.require);
+        return {
+          url: item.url as string,
+          timeoutMs: typeof item.timeoutMs === 'number' ? item.timeoutMs : undefined,
+          ...(require ? { require } : {}),
+        };
+      });
 
     res.json(saveLinksDraft(req.apiKeyName!, links));
   });

@@ -37,16 +37,11 @@ const els = {
   scheduleStop: document.getElementById('schedule-stop'),
   scheduleStatus: document.getElementById('schedule-status'),
 
-  loginModal: document.getElementById('login-modal'),
-  loginBackdrop: document.getElementById('login-backdrop'),
-  loginInfo: document.getElementById('login-modal-info'),
-  loginDomain: document.getElementById('login-domain'),
-  loginUrl: document.getElementById('login-url'),
-  loginUsername: document.getElementById('login-username'),
-  loginPassword: document.getElementById('login-password'),
-  loginStatus: document.getElementById('login-modal-status'),
-  loginCancel: document.getElementById('login-cancel'),
-  loginSubmit: document.getElementById('login-submit'),
+  loginBanner: document.getElementById('login-needed-banner'),
+  loginNeededText: document.getElementById('login-needed-text'),
+  loginNeededList: document.getElementById('login-needed-list'),
+  loginNeededLink: document.getElementById('login-needed-link'),
+  loginNeededDismiss: document.getElementById('login-needed-dismiss'),
 };
 
 els.apiKeyInput.value = state.apiKey;
@@ -125,7 +120,16 @@ function rankBadge(priority) {
 }
 
 function loginNote(r) {
-  if (r.usedLogin) return '<span class="hint">вход выполнен</span>';
+  if (r.usedLogin) {
+    let text = 'вход выполнен';
+    if (r.loginMs !== undefined && r.loginMs !== null) {
+      text += ` (${formatDuration(r.loginMs)})`;
+    }
+    if (r.loginUsername) {
+      text += `, ${escapeHtml(r.loginUsername)}`;
+    }
+    return `<span class="hint">${text}</span>`;
+  }
   if (r.needsLogin) return '<span class="hint" style="color:var(--danger)">требуется вход</span>';
   return '';
 }
@@ -135,40 +139,159 @@ function formatErrorText(error) {
   return error.replace(/\u001b\[[0-9;]*m/g, '').split(/\n\s*\n/)[0].trim();
 }
 
+function formatRequireNote(require) {
+  if (!Array.isArray(require) || require.length === 0) return '—';
+
+  return require
+    .map((condition, index) => {
+      if (condition.kind === 'element' || condition.path || condition.tag || condition.classes || condition.text) {
+        const parts = [];
+        if (condition.path) parts.push(`внутри=${condition.path}`);
+        if (condition.tag) parts.push(`элемент=${condition.tag}`);
+        if (condition.classes) parts.push(`class=${condition.classes}`);
+        if (condition.text) parts.push(`текст=${condition.text}`);
+        return parts.length ? `[${index + 1}] ${parts.join('; ')}` : '';
+      }
+      if (condition.kind === 'selector' && condition.value) {
+        return `[${index + 1}] селектор=${condition.value}`;
+      }
+      if (condition.kind === 'text' && condition.value) {
+        return `[${index + 1}] текст=${condition.value}`;
+      }
+      return '';
+    })
+    .filter(Boolean)
+    .join(', ') || '—';
+}
+
 function escapeHtml(value) {
   const div = document.createElement('div');
-  div.textContent = value;
+  div.textContent = value == null ? '' : String(value);
   return div.innerHTML;
 }
 
 // --- Интерактивный список ссылок ---
 
-function createLinkRow() {
+function createRequireRow(condition) {
   const row = document.createElement('div');
-  row.className = 'link-row';
+  row.className = 'link-require-row';
+
+  let path = condition?.path || '';
+  let tag = condition?.tag || '';
+  let classes = condition?.classes || '';
+  let text = condition?.text || '';
+
+  if (condition?.kind === 'text' && condition.value) {
+    text = condition.value;
+  }
+
   row.innerHTML = `
-    <span class="link-handle" draggable="true" title="Перетащите, чтобы изменить порядок">⠿</span>
-    <span class="link-rank" title="Приоритет (порядковый номер в списке)">1</span>
-    <input type="text" class="link-url" placeholder="https://example.com" />
-    <input type="number" class="link-timeout" min="5" max="600" step="5" value="30" title="Таймаут ожидания страницы, секунд" />
-    <span class="hint link-timeout-unit">с</span>
-    <button type="button" class="danger small-btn link-remove" title="Удалить ссылку">✕</button>
+    <div class="link-require-fields">
+      <label class="link-require-field">
+        <span>Внутри</span>
+        <input type="text" class="link-require-path" placeholder="form / nav / tr" title="Опционально: родительские теги" />
+      </label>
+      <label class="link-require-field link-require-field-tag">
+        <span>Элемент</span>
+        <input type="text" class="link-require-tag" placeholder="button / a / td" title="Тег: button, a, td, div…" />
+      </label>
+      <label class="link-require-field link-require-field-class">
+        <span>Классы</span>
+        <input type="text" class="link-require-class" placeholder="вставьте class как в HTML" title="class целиком из DevTools" />
+      </label>
+      <label class="link-require-field">
+        <span>Текст</span>
+        <input type="text" class="link-require-text" placeholder="опционально" title="Прямой текст именно этого элемента" />
+      </label>
+      <button type="button" class="danger small-btn link-require-remove" title="Удалить условие">✕</button>
+    </div>
   `;
+
+  row.querySelector('.link-require-path').value = path;
+  row.querySelector('.link-require-tag').value = tag;
+  row.querySelector('.link-require-class').value = classes;
+  row.querySelector('.link-require-text').value = text;
   return row;
 }
 
+function collectRequireFromItem(item) {
+  const rows = item.querySelectorAll('.link-require-row');
+  const require = [];
+
+  for (const row of rows) {
+    const path = row.querySelector('.link-require-path').value.trim();
+    const tag = row.querySelector('.link-require-tag').value.trim();
+    const classes = row.querySelector('.link-require-class').value.trim();
+    const text = row.querySelector('.link-require-text').value.trim();
+
+    if (!path && !tag && !classes && !text) continue;
+
+    require.push({
+      kind: 'element',
+      ...(path ? { path } : {}),
+      ...(tag ? { tag } : {}),
+      ...(classes ? { classes } : {}),
+      ...(text ? { text } : {}),
+    });
+  }
+
+  return require.length ? require : undefined;
+}
+
+function createLinkItem(link) {
+  const item = document.createElement('div');
+  item.className = 'link-item';
+
+  const hasRequire = Array.isArray(link?.require) && link.require.length > 0;
+
+  item.innerHTML = `
+    <div class="link-row">
+      <span class="link-handle" draggable="true" title="Перетащите, чтобы изменить порядок">⠿</span>
+      <span class="link-rank" title="Приоритет (порядковый номер в списке)">1</span>
+      <input type="text" class="link-url" placeholder="https://example.com" />
+      <button type="button" class="secondary small-btn link-extra-toggle" title="Доп. настройки" aria-expanded="false">⚙</button>
+      <input type="number" class="link-timeout" min="5" max="600" step="5" value="30" title="Таймаут ожидания страницы, секунд" />
+      <span class="hint link-timeout-unit">с</span>
+      <button type="button" class="danger small-btn link-remove" title="Удалить ссылку">✕</button>
+    </div>
+    <div class="link-extra${hasRequire ? ' is-open' : ''}">
+      <div class="link-require-list"></div>
+      <button type="button" class="secondary small-btn link-require-add">+ Условие</button>
+    </div>
+  `;
+
+  item.querySelector('.link-url').value = link?.url || '';
+  item.querySelector('.link-timeout').value = Math.round((link?.timeoutMs || 30000) / 1000);
+
+  const list = item.querySelector('.link-require-list');
+  const conditions = hasRequire ? link.require : [];
+  if (conditions.length === 0) {
+    list.appendChild(createRequireRow(null));
+  } else {
+    for (const condition of conditions) {
+      list.appendChild(createRequireRow(condition));
+    }
+  }
+
+  if (hasRequire) {
+    item.querySelector('.link-extra-toggle').setAttribute('aria-expanded', 'true');
+  }
+
+  return item;
+}
+
 function renumberRows(container) {
-  container.querySelectorAll('.link-row').forEach((row, index) => {
-    row.querySelector('.link-rank').textContent = String(index + 1);
+  container.querySelectorAll('.link-item').forEach((item, index) => {
+    item.querySelector('.link-rank').textContent = String(index + 1);
   });
 }
 
-function addLinkRow(container) {
-  container.appendChild(createLinkRow());
+function addLinkRow(container, link) {
+  container.appendChild(createLinkItem(link));
   renumberRows(container);
 }
 
-let draggedLinkRow = null;
+let draggedLinkItem = null;
 
 function initLinkRows(container, addButton) {
   addLinkRow(container);
@@ -178,17 +301,49 @@ function initLinkRows(container, addButton) {
   });
 
   container.addEventListener('click', (event) => {
-    const row = event.target.closest('.link-row');
-    if (!row) return;
+    const item = event.target.closest('.link-item');
+    if (!item) return;
 
     if (event.target.classList.contains('link-remove')) {
-      const rows = container.querySelectorAll('.link-row');
-      if (rows.length > 1) {
-        row.remove();
+      const items = container.querySelectorAll('.link-item');
+      if (items.length > 1) {
+        item.remove();
       } else {
-        row.querySelector('.link-url').value = '';
+        item.querySelector('.link-url').value = '';
+        const list = item.querySelector('.link-require-list');
+        list.innerHTML = '';
+        list.appendChild(createRequireRow(null));
+        item.querySelector('.link-extra').classList.remove('is-open');
+        item.querySelector('.link-extra-toggle').setAttribute('aria-expanded', 'false');
       }
       renumberRows(container);
+      scheduleDraftSave();
+      return;
+    }
+
+    if (event.target.classList.contains('link-extra-toggle')) {
+      const extra = item.querySelector('.link-extra');
+      const open = extra.classList.toggle('is-open');
+      event.target.setAttribute('aria-expanded', open ? 'true' : 'false');
+      return;
+    }
+
+    if (event.target.classList.contains('link-require-add')) {
+      item.querySelector('.link-require-list').appendChild(createRequireRow(null));
+      scheduleDraftSave();
+      return;
+    }
+
+    if (event.target.classList.contains('link-require-remove')) {
+      const row = event.target.closest('.link-require-row');
+      const list = item.querySelector('.link-require-list');
+      if (list.querySelectorAll('.link-require-row').length > 1) {
+        row.remove();
+      } else {
+        row.querySelectorAll('input').forEach((input) => {
+          input.value = '';
+        });
+      }
       scheduleDraftSave();
     }
   });
@@ -198,28 +353,28 @@ function initLinkRows(container, addButton) {
   container.addEventListener('dragstart', (event) => {
     const handle = event.target.closest('.link-handle');
     if (!handle) return;
-    draggedLinkRow = handle.closest('.link-row');
+    draggedLinkItem = handle.closest('.link-item');
     event.dataTransfer.effectAllowed = 'move';
-    draggedLinkRow.classList.add('dragging');
+    draggedLinkItem.classList.add('dragging');
   });
 
   container.addEventListener('dragover', (event) => {
-    if (!draggedLinkRow) return;
+    if (!draggedLinkItem) return;
     event.preventDefault();
 
-    const targetRow = event.target.closest('.link-row');
-    if (!targetRow || targetRow === draggedLinkRow) return;
+    const targetItem = event.target.closest('.link-item');
+    if (!targetItem || targetItem === draggedLinkItem) return;
 
-    const rect = targetRow.getBoundingClientRect();
+    const rect = targetItem.getBoundingClientRect();
     const before = event.clientY - rect.top < rect.height / 2;
-    container.insertBefore(draggedLinkRow, before ? targetRow : targetRow.nextSibling);
+    container.insertBefore(draggedLinkItem, before ? targetItem : targetItem.nextSibling);
     renumberRows(container);
   });
 
   container.addEventListener('dragend', () => {
-    if (draggedLinkRow) {
-      draggedLinkRow.classList.remove('dragging');
-      draggedLinkRow = null;
+    if (draggedLinkItem) {
+      draggedLinkItem.classList.remove('dragging');
+      draggedLinkItem = null;
       renumberRows(container);
       scheduleDraftSave();
     }
@@ -227,12 +382,17 @@ function initLinkRows(container, addButton) {
 }
 
 function collectLinkRows(container) {
-  return Array.from(container.querySelectorAll('.link-row'))
-    .map((row) => {
-      const url = row.querySelector('.link-url').value.trim();
+  return Array.from(container.querySelectorAll('.link-item'))
+    .map((item) => {
+      const url = item.querySelector('.link-url').value.trim();
       if (!url) return null;
-      const timeoutSeconds = Number(row.querySelector('.link-timeout').value) || 30;
-      return { url, timeoutMs: Math.round(timeoutSeconds * 1000) };
+      const timeoutSeconds = Number(item.querySelector('.link-timeout').value) || 30;
+      const require = collectRequireFromItem(item);
+      return {
+        url,
+        timeoutMs: Math.round(timeoutSeconds * 1000),
+        ...(require ? { require } : {}),
+      };
     })
     .filter((item) => item !== null);
 }
@@ -240,16 +400,13 @@ function collectLinkRows(container) {
 function fillLinkRows(container, links) {
   container.innerHTML = '';
 
-  if (links.length === 0) {
+  if (!links || links.length === 0) {
     addLinkRow(container);
     return;
   }
 
   for (const link of links) {
-    const row = createLinkRow();
-    row.querySelector('.link-url').value = link.url;
-    row.querySelector('.link-timeout').value = Math.round((link.timeoutMs || 30000) / 1000);
-    container.appendChild(row);
+    addLinkRow(container, link);
   }
 
   renumberRows(container);
@@ -261,6 +418,33 @@ function normalizeImportedTimeoutMs(value) {
   const num = Number(value);
   if (!Number.isFinite(num) || num <= 0) return 30000;
   return num < 1000 ? num * 1000 : num;
+}
+
+function normalizeImportedRequire(raw) {
+  if (!raw) return undefined;
+  const items = Array.isArray(raw) ? raw : [raw];
+  const require = items
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      if (item.kind === 'selector' || item.kind === 'text') {
+        if (!item.value) return null;
+        return { kind: item.kind, value: String(item.value) };
+      }
+      const path = typeof item.path === 'string' ? item.path.trim() : '';
+      const tag = typeof item.tag === 'string' ? item.tag.trim() : '';
+      const classes = typeof item.classes === 'string' ? item.classes.trim() : '';
+      const text = typeof item.text === 'string' ? item.text : '';
+      if (!path && !tag && !classes && !text) return null;
+      return {
+        kind: 'element',
+        ...(path ? { path } : {}),
+        ...(tag ? { tag } : {}),
+        ...(classes ? { classes } : {}),
+        ...(text ? { text } : {}),
+      };
+    })
+    .filter(Boolean);
+  return require.length ? require : undefined;
 }
 
 function parseLinksFileContent(filename, content) {
@@ -286,7 +470,12 @@ function parseLinksFileContent(filename, content) {
         }
 
         if (item && typeof item === 'object' && typeof item.url === 'string') {
-          return { url: item.url, timeoutMs: normalizeImportedTimeoutMs(item.timeoutMs) };
+          const require = normalizeImportedRequire(item.require);
+          return {
+            url: item.url,
+            timeoutMs: normalizeImportedTimeoutMs(item.timeoutMs),
+            ...(require ? { require } : {}),
+          };
         }
 
         return null;
@@ -391,32 +580,83 @@ async function syncActiveJobAndProgress() {
     return;
   }
 
+  const ACTIVE_JOB_KEY = 'activeJobId';
+
   try {
+    // ?job= в URL — после перепроверки с страницы доступов.
+    const params = new URLSearchParams(window.location.search);
+    const jobFromQuery = params.get('job');
+    if (jobFromQuery) {
+      state.activeJobId = jobFromQuery;
+      try {
+        sessionStorage.setItem(ACTIVE_JOB_KEY, jobFromQuery);
+      } catch {
+        // ignore
+      }
+    } else if (!state.activeJobId) {
+      try {
+        state.activeJobId = sessionStorage.getItem(ACTIVE_JOB_KEY) || null;
+      } catch {
+        // ignore
+      }
+    }
+
     const jobs = await api('/jobs');
-    const activeJob = jobs.find((job) => job.status === 'running' || job.status === 'pending');
+    const runningJobs = jobs.filter((job) => job.status === 'running' || job.status === 'pending');
+
+    // Предпочитаем сохранённую выполняющуюся задачу, иначе самую свежую.
+    let activeJob =
+      (state.activeJobId && runningJobs.find((job) => job.id === state.activeJobId)) ||
+      runningJobs[0] ||
+      null;
 
     if (activeJob) {
       state.activeJobId = activeJob.id;
+      try {
+        sessionStorage.setItem(ACTIVE_JOB_KEY, activeJob.id);
+      } catch {
+        // ignore
+      }
       const progress = await api(`/jobs/${activeJob.id}/progress`);
       renderProgress(progress);
       return;
     }
 
-    // Активной нет — если раньше следили за задачей, покажем её финальный
-    // прогресс (если файл ещё есть), иначе — состояние покоя.
+    // Активной нет — если раньше следили за задачей, покажем её финальный прогресс.
+    if (state.activeJobId) {
+      try {
+        const progress = await api(`/jobs/${state.activeJobId}/progress`);
+        renderProgress(progress);
+        if (progress.status === 'completed' || progress.status === 'failed') {
+          try {
+            sessionStorage.removeItem(ACTIVE_JOB_KEY);
+          } catch {
+            // ignore
+          }
+        }
+        return;
+      } catch {
+        state.activeJobId = null;
+        try {
+          sessionStorage.removeItem(ACTIVE_JOB_KEY);
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    renderIdleProgress();
+  } catch {
+    // Не затираем панель при сбое сети/смене вкладки — пробуем дочитать сохранённую задачу.
     if (state.activeJobId) {
       try {
         const progress = await api(`/jobs/${state.activeJobId}/progress`);
         renderProgress(progress);
         return;
       } catch {
-        state.activeJobId = null;
+        // оставляем текущий UI как есть
       }
     }
-
-    renderIdleProgress();
-  } catch {
-    renderIdleProgress();
   }
 }
 
@@ -456,6 +696,7 @@ function renderProgress(progress) {
       progress.status === 'pending' || progress.status === 'running'
         ? '<p class="hint">Результатов пока нет.</p>'
         : '';
+    maybeShowLoginPrompt(progress);
     return;
   }
 
@@ -469,6 +710,7 @@ function renderProgress(progress) {
         <td>${rankBadge(r.priority)}</td>
         <td>${r.status ?? '—'}</td>
         <td>${formatDuration(r.totalMs)}</td>
+        <td class="link-cell">${escapeHtml(formatRequireNote(r.require))}</td>
         <td>${r.passed ? '✅' : '❌'} ${loginNote(r)}</td>
         <td class="link-cell">${escapeHtml(formatErrorText(r.error))}</td>
       </tr>`,
@@ -478,7 +720,7 @@ function renderProgress(progress) {
   els.progressResults.innerHTML = `
     <table>
       <thead>
-        <tr><th>Ссылка</th><th>№</th><th>HTTP</th><th>Время</th><th>Итог</th><th>Описание ошибки</th></tr>
+        <tr><th>Ссылка</th><th>№</th><th>HTTP</th><th>Время</th><th>Доп. условия</th><th>Итог</th><th>Описание ошибки</th></tr>
       </thead>
       <tbody>${rows}</tbody>
     </table>`;
@@ -488,22 +730,17 @@ function renderProgress(progress) {
 
 renderIdleProgress();
 
-// --- Всплывающее окно входа (страница требует авторизацию) ---
-//
-// Если проверка обнаружила, что ссылка требует вход (HTTP 403 или вместо
-// содержимого показана форма логина), в результате появляется loginDomain.
-// Показываем окно ввода данных; после сохранения запускаем повторную
-// проверку только затронутых ссылок — тестер сам залогинится и перейдёт
-// на исходную страницу уже в авторизованной сессии.
+// --- Требуется вход: баннер → вкладка «Доступы», повтор в той же задаче ---
+
+const RECHECK_STORAGE_KEY = 'pendingRecheck';
 
 const loginPrompt = {
-  open: false,
-  current: null,
-  // Ключи "jobId:domain", по которым окно уже показывалось (введены данные
-  // или нажато «Пропустить») — чтобы не открывать его заново на каждый
-  // опрос прогресса той же задачи.
-  handled: new Set(),
+  dismissed: new Set(),
 };
+
+function isEphemeralLoginUrl(url) {
+  return /[?&](state|bo|code_challenge)=|\/blitz\/|openid-connect\/auth|\/realms\//i.test(url || '');
+}
 
 function collectLoginPrompts(progress) {
   const byDomain = new Map();
@@ -511,25 +748,28 @@ function collectLoginPrompts(progress) {
   for (const r of progress.results || []) {
     if (!r.loginDomain) continue;
 
-    // Окно нужно в двух случаях: данных для домена нет (needsLogin) или
-    // вход был выполнен с сохранёнными данными, но не помог (usedLogin + ошибка).
+    // Баннер нужен: данных нет (needsLogin) или вход не помог (usedLogin + ошибка).
     if (!(r.needsLogin || (r.usedLogin && !r.passed))) continue;
 
     const key = `${progress.jobId}:${r.loginDomain}`;
-    if (loginPrompt.handled.has(key)) continue;
+    if (loginPrompt.dismissed.has(key)) continue;
 
     if (!byDomain.has(r.loginDomain)) {
       byDomain.set(r.loginDomain, {
         key,
         domain: r.loginDomain,
         loginPageUrl: r.loginPageUrl || '',
-        retryLinks: [],
+        links: [],
         loginFailed: false,
       });
     }
 
     const entry = byDomain.get(r.loginDomain);
-    entry.retryLinks.push({ url: r.url, timeoutMs: r.timeoutMs || 30000 });
+    entry.links.push({
+      url: r.url,
+      timeoutMs: r.timeoutMs || 30000,
+      ...(r.require ? { require: r.require } : {}),
+    });
     if (!entry.loginPageUrl && r.loginPageUrl) entry.loginPageUrl = r.loginPageUrl;
     if (r.usedLogin && !r.passed) entry.loginFailed = true;
   }
@@ -537,98 +777,84 @@ function collectLoginPrompts(progress) {
   return Array.from(byDomain.values());
 }
 
-function maybeShowLoginPrompt(progress) {
-  if (loginPrompt.open) return;
-
-  const prompts = collectLoginPrompts(progress);
-  if (prompts.length === 0) return;
-
-  openLoginModal(prompts[0]);
-}
-
-function isEphemeralLoginUrl(url) {
-  return /[?&](state|bo|code_challenge)=|\/blitz\/|openid-connect\/auth|\/realms\//i.test(url || '');
-}
-
-function openLoginModal(prompt) {
-  loginPrompt.open = true;
-  loginPrompt.current = prompt;
-
-  const urls = prompt.retryLinks.map((l) => l.url).join(', ');
-  els.loginInfo.textContent = prompt.loginFailed
-    ? `Вход на «${prompt.domain}» с сохранёнными данными не удался. Проверьте логин и пароль — после сохранения ссылки будут проверены снова: ${urls}`
-    : `Для проверки требуется вход на «${prompt.domain}». После входа тестер вернётся на исходную страницу и проверит её: ${urls}`;
-
-  els.loginDomain.value = prompt.domain;
-  // OAuth/SSO URL с одноразовым state нельзя сохранять — при следующем
-  // входе state уже протух. Оставляем поле пустым: тестер заполнит форму
-  // на свежем редиректе, который получит при открытии исходной ссылки.
-  els.loginUrl.value = isEphemeralLoginUrl(prompt.loginPageUrl) ? '' : prompt.loginPageUrl || '';
-  els.loginUrl.placeholder =
-    'оставьте пустым для SSO (Keycloak/Blitz) — форма откроется сама при проверке';
-  els.loginUsername.value = '';
-  els.loginPassword.value = '';
-  els.loginStatus.textContent = '';
-  els.loginSubmit.disabled = false;
-  els.loginModal.classList.remove('hidden');
-  els.loginUsername.focus();
-}
-
-function closeLoginModal() {
-  if (loginPrompt.current) {
-    loginPrompt.handled.add(loginPrompt.current.key);
+function writePendingRecheck(jobId, items) {
+  if (!jobId || !items?.length) {
+    sessionStorage.removeItem(RECHECK_STORAGE_KEY);
+    return;
   }
-  loginPrompt.open = false;
-  loginPrompt.current = null;
-  els.loginModal.classList.add('hidden');
+  sessionStorage.setItem(
+    RECHECK_STORAGE_KEY,
+    JSON.stringify({
+      jobId,
+      items: items.map((item) => ({
+        domain: item.domain,
+        loginPageUrl: isEphemeralLoginUrl(item.loginPageUrl) ? '' : item.loginPageUrl || '',
+        links: item.links,
+        loginFailed: Boolean(item.loginFailed),
+      })),
+    }),
+  );
 }
 
-els.loginCancel.addEventListener('click', closeLoginModal);
-els.loginBackdrop.addEventListener('click', closeLoginModal);
+function hideLoginBanner() {
+  els.loginBanner.classList.add('hidden');
+  els.loginNeededList.innerHTML = '';
+  els.loginNeededText.textContent = '';
+}
 
-els.loginSubmit.addEventListener('click', async () => {
-  const prompt = loginPrompt.current;
-  if (!prompt) return;
-
-  const username = els.loginUsername.value.trim();
-  const password = els.loginPassword.value;
-
-  if (!username || !password) {
-    els.loginStatus.textContent = 'Укажите логин и пароль.';
+function maybeShowLoginPrompt(progress) {
+  if (!progress?.jobId) {
+    hideLoginBanner();
     return;
   }
 
-  els.loginSubmit.disabled = true;
-  els.loginStatus.textContent = 'Сохранение данных…';
-
-  try {
-    const loginUrlRaw = els.loginUrl.value.trim();
-    const payload = {
-      username,
-      password,
-    };
-    // Одноразовые SSO URL не отправляем вообще — иначе старые версии API
-    // или повторный вход с протухшим state ломают проверку.
-    if (loginUrlRaw && !isEphemeralLoginUrl(loginUrlRaw)) {
-      payload.loginUrl = loginUrlRaw;
-    }
-
-    await api(`/credentials/${encodeURIComponent(prompt.domain)}`, {
-      method: 'PUT',
-      jsonBody: payload,
-    });
-
-    els.loginStatus.textContent = 'Запуск повторной проверки…';
-    const job = await api('/jobs', { method: 'POST', jsonBody: { links: prompt.retryLinks } });
-    state.activeJobId = job.id;
-
-    closeLoginModal();
-    els.manualStatus.textContent = `Повторная проверка «${prompt.domain}» после входа запущена…`;
-    await syncActiveJobAndProgress();
-  } catch (error) {
-    els.loginSubmit.disabled = false;
-    els.loginStatus.textContent = `Ошибка: ${error.message}`;
+  // Пока задача ещё бежит — не отвлекаем баннером.
+  if (progress.status === 'pending' || progress.status === 'running') {
+    return;
   }
+
+  const prompts = collectLoginPrompts(progress);
+  if (prompts.length === 0) {
+    hideLoginBanner();
+    return;
+  }
+
+  writePendingRecheck(progress.jobId, prompts);
+
+  const totalLinks = prompts.reduce((sum, p) => sum + p.links.length, 0);
+  els.loginNeededText.textContent = prompts.some((p) => p.loginFailed)
+    ? `Вход не удался или данные не настроены для ${prompts.length} домен(ов), ${totalLinks} ссылка(и). Заполните доступы — ссылки перепроверятся в той же задаче.`
+    : `Для ${prompts.length} домен(ов) (${totalLinks} ссылка(и)) нужен вход. Откройте «Доступы для входа», сохраните логин/пароль — проверка продолжится в этой задаче.`;
+
+  els.loginNeededList.innerHTML = prompts
+    .map((p) => {
+      const urls = p.links.map((l) => escapeHtml(l.url)).join('<br>');
+      return `<li><strong>${escapeHtml(p.domain)}</strong>${p.loginFailed ? ' <span class="hint">(вход не удался)</span>' : ''}<div class="login-needed-urls">${urls}</div></li>`;
+    })
+    .join('');
+
+  const first = prompts[0];
+  const href = `/credentials.html?domain=${encodeURIComponent(first.domain)}${
+    first.loginPageUrl && !isEphemeralLoginUrl(first.loginPageUrl)
+      ? `&loginUrl=${encodeURIComponent(first.loginPageUrl)}`
+      : ''
+  }`;
+  els.loginNeededLink.href = href;
+  els.loginBanner.classList.remove('hidden');
+}
+
+els.loginNeededDismiss.addEventListener('click', () => {
+  const jobId = state.activeJobId;
+  if (jobId) {
+    for (const key of [...loginPrompt.dismissed]) {
+      // keep
+    }
+    // Помечаем все текущие домены баннера как скрытые.
+    els.loginNeededList.querySelectorAll('li strong').forEach((el) => {
+      loginPrompt.dismissed.add(`${jobId}:${el.textContent}`);
+    });
+  }
+  hideLoginBanner();
 });
 
 // --- Проверить один раз ---
@@ -793,6 +1019,20 @@ setInterval(() => {
 setInterval(() => {
   syncActiveJobAndProgress();
 }, 1500);
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    syncActiveJobAndProgress();
+  }
+});
+
+window.addEventListener('pageshow', () => {
+  syncActiveJobAndProgress();
+});
+
+window.addEventListener('focus', () => {
+  syncActiveJobAndProgress();
+});
 
 setInterval(() => {
   refreshDraft();
