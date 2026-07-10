@@ -14,7 +14,13 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { LinkRequireCondition } from '../loadLinks.js';
+import {
+  getNotificationSettings,
+  sendTelegramMessage,
+  type NotificationSettings,
+} from '../notifier.js';
 import { credentialsFileFor } from './credentialStore.js';
+import { notificationsFileFor } from './notificationStore.js';
 import {
   getJob,
   jobDirFor,
@@ -104,8 +110,113 @@ function readResultsSummary(jobId: string): JobSummary | undefined {
   }
 }
 
+function readResultRows(jobId: string): LinkResultRow[] {
+  const resultsPath = resultsFileFor(jobId);
+  if (!existsSync(resultsPath)) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(resultsPath, 'utf-8')) as ResultsFile;
+    return Array.isArray(parsed.results) ? parsed.results : [];
+  } catch {
+    return [];
+  }
+}
+
 function shortId(jobId: string): string {
   return jobId.slice(0, 8);
+}
+
+function truncate(text: string, maxLen: number): string {
+  return text.length > maxLen ? `${text.slice(0, maxLen)}…` : text;
+}
+
+/**
+ * Если для API-ключа настроены и включены Telegram-уведомления — отправляет
+ * администратору короткое сообщение о том, что задача целиком не выполнилась
+ * (сама она не запустилась/упала). Уведомления по отдельным ссылкам с
+ * ошибками отправляются раньше и отдельно — прямо из репортера
+ * (см. src/russianReporter.ts), в момент обнаружения каждой ошибки, а не
+ * пачкой в конце задачи.
+ */
+async function notifyJobFailed(jobId: string, apiKeyName: string | undefined, error: string): Promise<void> {
+  if (!apiKeyName) {
+    return;
+  }
+
+  let settings: NotificationSettings | undefined;
+  try {
+    settings = getNotificationSettings(notificationsFileFor(apiKeyName));
+  } catch {
+    return;
+  }
+
+  if (!settings?.enabled || !settings.botToken || !settings.chatId) {
+    return;
+  }
+
+  const text = `⚠️ Задача ${shortId(jobId)} (ключ «${apiKeyName}») не выполнена.\nОшибка: ${truncate(error, 300)}`;
+  const result = await sendTelegramMessage(settings.botToken, settings.chatId, text);
+  if (!result.ok) {
+    logJob(jobId, `Не удалось отправить уведомление в Telegram: ${result.error}`, true);
+  }
+}
+
+/**
+ * Запасной канал: после завершения задачи шлём в Telegram по каждой
+ * упавшей ссылке с сервера (не из дочернего Playwright). Так уведомление
+ * не теряется, если в воркере не было NOTIFICATIONS_FILE или async-репортер
+ * не успел дождаться ответа Telegram.
+ */
+async function notifyFailedLinkResults(
+  jobId: string,
+  apiKeyName: string | undefined,
+  results: LinkResultRow[],
+): Promise<void> {
+  if (!apiKeyName) {
+    return;
+  }
+
+  const failed = results.filter((row) => !row.passed);
+  if (failed.length === 0) {
+    return;
+  }
+
+  let settings: NotificationSettings | undefined;
+  try {
+    settings = getNotificationSettings(notificationsFileFor(apiKeyName));
+  } catch {
+    return;
+  }
+
+  if (!settings?.enabled || !settings.botToken || !settings.chatId) {
+    logJob(
+      jobId,
+      `[уведомления] пропуск ${failed.length} ошибк(и): настройки выключены или не заданы`,
+    );
+    return;
+  }
+
+  for (const row of failed.slice(0, 10)) {
+    const reason = row.needsLogin
+      ? 'требуется вход (данные не настроены)'
+      : row.error
+        ? truncate(row.error.split('\n')[0]?.trim() || row.error, 200)
+        : `HTTP ${row.status ?? 'нет ответа'}`;
+    const text = `❌ [job ${shortId(jobId)}] ${row.url}\n${reason}`;
+    const sendResult = await sendTelegramMessage(settings.botToken, settings.chatId, text);
+    if (!sendResult.ok) {
+      logJob(jobId, `Не удалось отправить уведомление в Telegram: ${sendResult.error}`, true);
+    } else {
+      logJob(jobId, `Уведомление отправлено в Telegram: ${row.url}`);
+    }
+  }
+
+  if (failed.length > 10) {
+    const text = `⚠️ [job ${shortId(jobId)}] ещё ошибок по ссылкам: ${failed.length - 10} (в Telegram показаны первые 10)`;
+    await sendTelegramMessage(settings.botToken, settings.chatId, text);
+  }
 }
 
 function logJob(jobId: string, message: string, asError = false): void {
@@ -247,12 +358,25 @@ function executeJob(jobId: string, linksFile: string, recheckDir?: string): Prom
     const absCredentials = apiKeyName
       ? absolutePath(credentialsFileFor(apiKeyName))
       : undefined;
+    const absNotifications = apiKeyName
+      ? absolutePath(notificationsFileFor(apiKeyName))
+      : undefined;
+
+    if (absNotifications) {
+      logJob(jobId, `[уведомления] файл настроек: ${absNotifications}`);
+    } else {
+      logJob(jobId, '[уведомления] API-ключ без файла настроек — Telegram отключён');
+    }
 
     const childEnv: NodeJS.ProcessEnv = {
       ...process.env,
       LINKS_FILE: absLinksFile,
       LOG_DIR: absLogDir,
       ...(absCredentials ? { CREDENTIALS_FILE: absCredentials } : {}),
+      // Telegram сразу при обнаружении ошибки на ссылке — без ожидания
+      // конца всей задачи. JOB_ID — короткая метка в тексте сообщения.
+      ...(absNotifications ? { NOTIFICATIONS_FILE: absNotifications } : {}),
+      JOB_ID: jobId,
     };
     // Иначе Node пишет warning, если в окружении родителя уже есть FORCE_COLOR/NO_COLOR.
     delete childEnv.FORCE_COLOR;
@@ -282,73 +406,81 @@ function executeJob(jobId: string, linksFile: string, recheckDir?: string): Prom
     }
 
     child.on('error', (error) => {
+      const message = `Не удалось запустить Playwright: ${error.message}`;
       updateJob(jobId, {
         status: 'failed',
         finishedAt: new Date().toISOString(),
-        error: `Не удалось запустить Playwright: ${error.message}`,
+        error: message,
       });
-      logJob(jobId, `Не удалось запустить Playwright: ${error.message}`, true);
+      logJob(jobId, message, true);
+      void notifyJobFailed(jobId, apiKeyName, message);
       resolvePromise();
     });
 
     child.on('close', (code) => {
-      if (isRecheck && recheckDir) {
-        const summary = mergeRecheckIntoJob(jobId, recheckDir);
+      void (async () => {
+        if (isRecheck && recheckDir) {
+          const summary = mergeRecheckIntoJob(jobId, recheckDir);
+          if (summary) {
+            updateJob(jobId, {
+              status: 'completed',
+              finishedAt: new Date().toISOString(),
+              summary,
+              error: undefined,
+            });
+            logJob(
+              jobId,
+              `Повторная проверка завершена: всего ${summary.total}, успешно ${summary.passed}, ошибок ${summary.failed}.`,
+            );
+            await notifyFailedLinkResults(jobId, apiKeyName, readResultRows(jobId));
+          } else {
+            const error =
+              stderrTail.trim() ||
+              (code === null
+                ? 'Повторная проверка завершилась без результатов.'
+                : `Повторная проверка завершилась с кодом ${code} без результатов.`);
+            updateJob(jobId, {
+              status: 'failed',
+              finishedAt: new Date().toISOString(),
+              error,
+            });
+            logJob(jobId, `Повторная проверка не выполнена: ${error}`, true);
+            await notifyJobFailed(jobId, apiKeyName, error);
+          }
+          resolvePromise();
+          return;
+        }
+
+        const summary = readResultsSummary(jobId);
+
         if (summary) {
           updateJob(jobId, {
             status: 'completed',
             finishedAt: new Date().toISOString(),
             summary,
-            error: undefined,
           });
           logJob(
             jobId,
-            `Повторная проверка завершена: всего ${summary.total}, успешно ${summary.passed}, ошибок ${summary.failed}.`,
+            `Завершено: всего ${summary.total}, успешно ${summary.passed}, ошибок ${summary.failed}.`,
           );
+          await notifyFailedLinkResults(jobId, apiKeyName, readResultRows(jobId));
         } else {
           const error =
             stderrTail.trim() ||
             (code === null
-              ? 'Повторная проверка завершилась без результатов.'
-              : `Повторная проверка завершилась с кодом ${code} без результатов.`);
+              ? 'Playwright завершился без результатов.'
+              : `Playwright завершился с кодом ${code} без результатов.`);
           updateJob(jobId, {
             status: 'failed',
             finishedAt: new Date().toISOString(),
             error,
           });
-          logJob(jobId, `Повторная проверка не выполнена: ${error}`, true);
+          logJob(jobId, `Задача не выполнена: ${error}`, true);
+          await notifyJobFailed(jobId, apiKeyName, error);
         }
+
         resolvePromise();
-        return;
-      }
-
-      const summary = readResultsSummary(jobId);
-
-      if (summary) {
-        updateJob(jobId, {
-          status: 'completed',
-          finishedAt: new Date().toISOString(),
-          summary,
-        });
-        logJob(
-          jobId,
-          `Завершено: всего ${summary.total}, успешно ${summary.passed}, ошибок ${summary.failed}.`,
-        );
-      } else {
-        const error =
-          stderrTail.trim() ||
-          (code === null
-            ? 'Playwright завершился без результатов.'
-            : `Playwright завершился с кодом ${code} без результатов.`);
-        updateJob(jobId, {
-          status: 'failed',
-          finishedAt: new Date().toISOString(),
-          error,
-        });
-        logJob(jobId, `Задача не выполнена: ${error}`, true);
-      }
-
-      resolvePromise();
+      })();
     });
   });
 }
@@ -367,6 +499,7 @@ function pump(): void {
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         updateJob(entry.jobId, { status: 'failed', finishedAt: new Date().toISOString(), error: message });
+        void notifyJobFailed(entry.jobId, getJob(entry.jobId)?.apiKeyName, message);
       })
       .finally(() => {
         activeCount -= 1;

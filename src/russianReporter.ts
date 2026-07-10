@@ -8,6 +8,7 @@ import type {
   TestResult,
 } from '@playwright/test/reporter';
 import { LOG_FILE, PROGRESS_JSON_FILE, RESULTS_JSON_FILE, type LinkResult } from './linkReport.js';
+import { getNotificationSettings, type NotificationSettings } from './notifier.js';
 
 const ATTACHMENT_NAME = 'link-result';
 
@@ -32,11 +33,37 @@ function printLine(line: string): void {
 class RussianReporter implements Reporter {
   private results: LinkResult[] = [];
   private total = 0;
+  /** Настройки уведомлений читаются один раз на весь прогон (не на каждую ссылку). */
+  private notificationSettings: NotificationSettings | undefined;
+  private jobLabel = '';
 
   onBegin(_config: FullConfig, suite: Suite): void {
     this.total = suite.allTests().length;
     printLine(`\nЗапуск тестов: ${this.total}\n`);
     this.writeProgress(null);
+
+    const notificationsFile = process.env.NOTIFICATIONS_FILE;
+    if (notificationsFile) {
+      try {
+        this.notificationSettings = getNotificationSettings(notificationsFile);
+        if (this.notificationSettings?.enabled) {
+          printLine(
+            `[уведомления] включены (chat ${this.notificationSettings.chatId || '—'}), файл: ${notificationsFile}`,
+          );
+        } else if (this.notificationSettings) {
+          printLine('[уведомления] настройки есть, но переключатель выключен — сообщения не отправляются');
+        } else {
+          printLine(`[уведомления] файл не прочитан: ${notificationsFile}`);
+        }
+      } catch (error: unknown) {
+        this.notificationSettings = undefined;
+        const message = error instanceof Error ? error.message : String(error);
+        printLine(`[уведомления] ошибка чтения настроек: ${message}`);
+      }
+    } else {
+      printLine('[уведомления] NOTIFICATIONS_FILE не передан — Telegram отключён для этого прогона');
+    }
+    this.jobLabel = (process.env.JOB_ID || '').slice(0, 8);
   }
 
   onStdOut(chunk: string | Buffer): void {
@@ -58,7 +85,7 @@ class RussianReporter implements Reporter {
     this.writeProgress(urlFromTitle(test.title));
   }
 
-  onTestEnd(test: TestCase, result: TestResult): void {
+  async onTestEnd(test: TestCase, result: TestResult): Promise<void> {
     // Собираем результат через attachment, а не через переменную в памяти
     // теста: Playwright может перезапускать воркер-процесс после упавшего
     // теста, а репортер (в отличие от воркеров) живёт в одном процессе
@@ -67,9 +94,12 @@ class RussianReporter implements Reporter {
       (item) => item.name === ATTACHMENT_NAME,
     );
 
+    let linkResult: LinkResult | undefined;
+
     if (attachment?.body) {
       try {
         const data = JSON.parse(attachment.body.toString('utf-8')) as LinkResult;
+        linkResult = data;
         this.results.push(data);
       } catch {
         // Повреждённый attachment — пропускаем, чтобы не падать в репортере.
@@ -86,6 +116,17 @@ class RussianReporter implements Reporter {
         if (testError.message) {
           printLine(testError.message);
         }
+      }
+    }
+
+    // Фактическая отправка в Telegram делается на стороне сервера после
+    // записи results.json (см. notifyFailedLinkResults в jobRunner) — так
+    // надёжнее на Windows/shell spawn. Здесь только диагностика настроек.
+    if (linkResult && !linkResult.passed) {
+      if (!this.notificationSettings?.enabled) {
+        printLine(
+          `[уведомления] ошибка по ${linkResult.url} будет отправлена сервером после завершения задачи`,
+        );
       }
     }
   }

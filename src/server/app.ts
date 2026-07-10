@@ -6,8 +6,16 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import multer from 'multer';
 import { loadLinks, parseRequireConditions } from '../loadLinks.js';
 import { deleteDomainCredential, listDomainCredentials, saveDomainCredential } from '../credentialStore.js';
+import {
+  deleteNotificationSettings,
+  getNotificationSettings,
+  maskToken,
+  saveNotificationSettings,
+  sendTelegramMessage,
+} from '../notifier.js';
 import { findApiKeyOwner, loadApiKeys } from './apiKeys.js';
 import { credentialsFileFor } from './credentialStore.js';
+import { notificationsFileFor } from './notificationStore.js';
 import {
   createJob,
   deleteFinishedJobs,
@@ -546,6 +554,88 @@ export function createApp() {
     }
 
     res.status(204).send();
+  });
+
+  // Уведомления администратора об ошибках через Telegram-бота: токен бота
+  // и chat id хранятся отдельно на каждый API-ключ (см. src/notifier.ts).
+  // Токен никогда не возвращается клиенту целиком — только признак того,
+  // что он задан, и последние 4 символа для подтверждения (см. maskToken).
+  api.get('/notifications', (req: Request, res: Response) => {
+    const settings = getNotificationSettings(notificationsFileFor(req.apiKeyName!));
+
+    res.json({
+      chatId: settings?.chatId || '',
+      enabled: settings?.enabled ?? false,
+      botTokenSet: Boolean(settings?.botToken),
+      botTokenPreview: settings?.botToken ? maskToken(settings.botToken) : '',
+    });
+  });
+
+  api.put('/notifications', (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const filePath = notificationsFileFor(req.apiKeyName!);
+    const existing = getNotificationSettings(filePath);
+
+    const chatId = typeof body.chatId === 'string' ? body.chatId.trim() : '';
+    const botTokenRaw = typeof body.botToken === 'string' ? body.botToken.trim() : '';
+    // Токен можно не передавать повторно при простом изменении chat id/enabled —
+    // тогда сохраняем ранее сохранённый токен.
+    const botToken = botTokenRaw || existing?.botToken || '';
+    const enabled = Boolean(body.enabled);
+
+    if (!chatId) {
+      res.status(400).json({ error: 'Укажите chat id — куда бот будет присылать уведомления.' });
+      return;
+    }
+
+    if (!botToken) {
+      res.status(400).json({ error: 'Укажите токен Telegram-бота (получить у @BotFather).' });
+      return;
+    }
+
+    saveNotificationSettings(filePath, { botToken, chatId, enabled });
+
+    res.status(200).json({
+      chatId,
+      enabled,
+      botTokenSet: true,
+      botTokenPreview: maskToken(botToken),
+    });
+  });
+
+  api.delete('/notifications', (req: Request, res: Response) => {
+    const removed = deleteNotificationSettings(notificationsFileFor(req.apiKeyName!));
+
+    if (!removed) {
+      res.status(404).json({ error: 'Уведомления не настроены.' });
+      return;
+    }
+
+    res.status(204).send();
+  });
+
+  // Отправляет тестовое сообщение сохранёнными настройками — чтобы
+  // проверить токен бота и chat id, не дожидаясь реальной ошибки задачи.
+  api.post('/notifications/test', async (req: Request, res: Response) => {
+    const settings = getNotificationSettings(notificationsFileFor(req.apiKeyName!));
+
+    if (!settings?.botToken || !settings.chatId) {
+      res.status(400).json({ error: 'Сначала сохраните токен бота и chat id.' });
+      return;
+    }
+
+    const result = await sendTelegramMessage(
+      settings.botToken,
+      settings.chatId,
+      `✅ Тестовое сообщение от Playwright Link Tester (ключ «${req.apiKeyName}»). Если вы его видите — уведомления настроены верно.`,
+    );
+
+    if (!result.ok) {
+      res.status(502).json({ error: result.error || 'Telegram не принял сообщение.' });
+      return;
+    }
+
+    res.status(200).json({ ok: true });
   });
 
   app.use('/api/v1', api);
