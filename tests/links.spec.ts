@@ -6,6 +6,7 @@ import {
   loadLinks,
   parseClassList,
   parseElementPath,
+  significantClassFingerprints,
   type LinkRequireCondition,
 } from '../src/loadLinks.js';
 import { logLinkResult, simplifyErrorMessage, type LinkResult } from '../src/linkReport.js';
@@ -387,9 +388,11 @@ function findCredentialForUrl(credentialsPath: string, url: string): DomainCrede
 }
 
 /**
- * Доп. условия: сначала находим элемент по (путь + тег + class),
- * затем текст сравниваем ТОЛЬКО с прямым текстом этого узла.
- * Никакого page.getByText / поиска строки по document.
+ * Доп. условия с нуля:
+ * 1) Путь — родители; Тег — сам элемент; Класс — вставка из DevTools (шум отфильтруем);
+ *    Текст — прямой текст узла.
+ * 2) Ищем через classList.contains по значимым классам (не CSS-селектор).
+ * 3) Текст сверяем только с прямыми text-node цели, не по всей странице.
  */
 async function assertRequireConditions(
   page: Page,
@@ -414,7 +417,6 @@ async function assertRequireConditions(
       continue;
     }
 
-    // Legacy kind=text — оставляем, но element-условия ниже его не используют.
     if (condition.kind === 'text' && condition.value) {
       await expect(
         page.getByText(condition.value, { exact: true }).first(),
@@ -423,29 +425,44 @@ async function assertRequireConditions(
       continue;
     }
 
-    const classNames = condition.classes ? parseClassList(condition.classes) : [];
     const needle = (condition.text || '').trim();
     const tagName = (condition.tag || '').trim().toLowerCase();
     const pathTags = condition.path ? parseElementPath(condition.path) : [];
+    const pastedClasses = condition.classes ? parseClassList(condition.classes) : [];
+    const classFingerprints = significantClassFingerprints(pastedClasses);
 
-    if (needle && classNames.length === 0) {
+    // Текст один без якоря слишком широкий — нужен тег, путь или значимый класс.
+    if (needle && !tagName && pathTags.length === 0 && classFingerprints.length === 0) {
       expect(
         false,
-        `${label} для ${url}: укажите «Классы» — текст проверяется только у элемента с этими class.`,
+        `${label} для ${url}: для текста укажите «Тег», «Путь» или «Класс» (значимые class после фильтра).` +
+          (pastedClasses.length > 0
+            ? ` Вставлено ${pastedClasses.length} class, значимых: 0 (остались только layout).`
+            : ''),
       ).toBe(true);
       continue;
     }
 
-    if (!classNames.length && !tagName && pathTags.length === 0) {
-      expect(false, `${label} для ${url}: укажите «Внутри», «Элемент» или «Классы».`).toBe(true);
+    if (!needle && !tagName && pathTags.length === 0 && classFingerprints.length === 0) {
+      expect(
+        false,
+        `${label} для ${url}: заполните «Путь», «Тег», «Класс» или «Текст».` +
+          (pastedClasses.length > 0
+            ? ` Вставлено ${pastedClasses.length} class, значимых: 0 — добавьте тег/путь/текст или тематические class.`
+            : ''),
+      ).toBe(true);
       continue;
     }
 
     const describe =
       [
-        pathTags.length ? `внутри=${pathTags.join(' ')}` : '',
-        tagName ? `элемент=${tagName}` : '',
-        classNames.length ? `class=(${classNames.length} шт.)` : '',
+        pathTags.length ? `путь=${pathTags.join(' ')}` : '',
+        tagName ? `тег=${tagName}` : '',
+        classFingerprints.length
+          ? `класс≈[${classFingerprints.join(' ')}]`
+          : pastedClasses.length
+            ? 'класс=(только шум, не используется)'
+            : '',
         needle ? `текст=${needle}` : '',
       ]
         .filter(Boolean)
@@ -456,16 +473,29 @@ async function assertRequireConditions(
       candidateCount: 0,
       visibleCount: 0,
       visibleTexts: [] as string[],
+      poolCount: 0,
+      sample: [] as string[],
     };
 
     let found = false;
 
     while (Date.now() <= deadline) {
-      // Ищем через classList.contains (не длинный CSS) — иначе Tailwind
-      // вроде !w-[var(--tablet-width)] даёт 0 совпадений в querySelector.
       const info = await page.evaluate(
-        ({ pathTags: path, tagName: tag, classNames: classes, needle: textNeedle }) => {
+        ({ pathTags: path, tagName: tag, classFingerprints: fingerprints, needle: textNeedle }) => {
           const normalize = (value: string) => value.replace(/\s+/g, ' ').trim();
+
+          const fingerprint = (className: string): string => {
+            let token = className.trim().replace(/^!+/, '');
+            token = token.replace(/^(?:[a-z0-9_-]+:)+/i, '').replace(/^!+/, '');
+            token = token.replace(/-tablet-|-desktop-|-mobile-/gi, '-');
+            return token.toLowerCase();
+          };
+
+          const hasClasses = (el: Element): boolean => {
+            if (fingerprints.length === 0) return true;
+            const present = new Set(Array.from(el.classList).map((name) => fingerprint(name)));
+            return fingerprints.every((fp) => present.has(fp));
+          };
 
           const directText = (el: Element): string => {
             let text = '';
@@ -478,9 +508,7 @@ async function assertRequireConditions(
           };
 
           const hasPath = (el: Element): boolean => {
-            if (path.length === 0) {
-              return true;
-            }
+            if (path.length === 0) return true;
             const ancestors: string[] = [];
             let node: Element | null = el.parentElement;
             while (node) {
@@ -490,18 +518,14 @@ async function assertRequireConditions(
             let from = 0;
             for (const pathTag of [...path].reverse()) {
               const idx = ancestors.indexOf(pathTag, from);
-              if (idx === -1) {
-                return false;
-              }
+              if (idx === -1) return false;
               from = idx + 1;
             }
             return true;
           };
 
           const onScreen = (el: Element): boolean => {
-            if (!(el instanceof HTMLElement)) {
-              return false;
-            }
+            if (!(el instanceof HTMLElement)) return false;
             let node: HTMLElement | null = el;
             while (node) {
               const style = window.getComputedStyle(node);
@@ -515,9 +539,7 @@ async function assertRequireConditions(
               node = node.parentElement;
             }
             const rect = el.getBoundingClientRect();
-            if (rect.width <= 0 || rect.height <= 0) {
-              return false;
-            }
+            if (rect.width <= 0 || rect.height <= 0) return false;
             if (
               rect.bottom <= 0 ||
               rect.right <= 0 ||
@@ -536,9 +558,7 @@ async function assertRequireConditions(
                   rect.top < pr.bottom - 1 &&
                   rect.right > pr.left + 1 &&
                   rect.left < pr.right - 1;
-                if (!overlaps) {
-                  return false;
-                }
+                if (!overlaps) return false;
               }
               parent = parent.parentElement;
             }
@@ -547,25 +567,27 @@ async function assertRequireConditions(
 
           const pool = Array.from(document.querySelectorAll(tag || '*'));
           const candidates = pool.filter((el) => {
-            if (tag && el.tagName.toLowerCase() !== tag) {
-              return false;
-            }
-            if (classes.length > 0 && !classes.every((cls) => el.classList.contains(cls))) {
-              return false;
-            }
-            if (!hasPath(el)) {
-              return false;
-            }
+            if (tag && el.tagName.toLowerCase() !== tag) return false;
+            if (!hasClasses(el)) return false;
+            if (!hasPath(el)) return false;
             return true;
           });
 
           const visibleTexts: string[] = [];
           let visibleCount = 0;
+          const sample: string[] = [];
+
+          for (const el of pool.slice(0, 40)) {
+            if (sample.length >= 8) break;
+            const own = directText(el);
+            if (textNeedle && own !== normalize(textNeedle)) continue;
+            sample.push(
+              `<${el.tagName.toLowerCase()} class="${el.className.toString().slice(0, 120)}">${own || '(пусто)'}`,
+            );
+          }
 
           for (const el of candidates) {
-            if (!onScreen(el)) {
-              continue;
-            }
+            if (!onScreen(el)) continue;
             visibleCount += 1;
             const own = directText(el);
             visibleTexts.push(own === '' ? '(пусто)' : own);
@@ -577,6 +599,8 @@ async function assertRequireConditions(
                   candidateCount: candidates.length,
                   visibleCount,
                   visibleTexts: visibleTexts.slice(0, 20),
+                  poolCount: pool.length,
+                  sample,
                 };
               }
             } else {
@@ -585,6 +609,8 @@ async function assertRequireConditions(
                 candidateCount: candidates.length,
                 visibleCount,
                 visibleTexts: visibleTexts.slice(0, 20),
+                poolCount: pool.length,
+                sample,
               };
             }
           }
@@ -594,20 +620,19 @@ async function assertRequireConditions(
             candidateCount: candidates.length,
             visibleCount,
             visibleTexts: visibleTexts.slice(0, 20),
+            poolCount: pool.length,
+            sample,
           };
         },
-        {
-          pathTags,
-          tagName,
-          classNames,
-          needle,
-        },
+        { pathTags, tagName, classFingerprints, needle },
       );
 
       lastInfo = {
         candidateCount: info.candidateCount,
         visibleCount: info.visibleCount,
         visibleTexts: info.visibleTexts,
+        poolCount: info.poolCount,
+        sample: info.sample,
       };
 
       if (info.found) {
@@ -622,13 +647,20 @@ async function assertRequireConditions(
       lastInfo.visibleTexts.length > 0
         ? ` Видимые тексты: ${lastInfo.visibleTexts.join(', ')}.`
         : '';
+    const sampleNote =
+      lastInfo.candidateCount === 0 && lastInfo.sample.length > 0
+        ? ` Примеры ${tagName || 'элементов'} с похожим текстом: ${lastInfo.sample.join(' | ')}.`
+        : lastInfo.candidateCount === 0
+          ? ` На странице ${tagName || 'элементов'}: ${lastInfo.poolCount} (возможно, другой DOM / нужен вход / контент ещё не загрузился).`
+          : '';
 
     expect(
       found,
       `${label} для ${url}: не найден видимый элемент (${describe})` +
         (needle ? ` с текстом «${needle}»` : '') +
         ` (кандидатов: ${lastInfo.candidateCount}, видимых: ${lastInfo.visibleCount}).` +
-        textsNote,
+        textsNote +
+        sampleNote,
     ).toBe(true);
   }
 }

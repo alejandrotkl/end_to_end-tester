@@ -140,9 +140,9 @@ function formatRequireNote(require) {
     .map((condition, index) => {
       if (condition.kind === 'element' || condition.path || condition.tag || condition.classes || condition.text) {
         const parts = [];
-        if (condition.path) parts.push(`внутри=${condition.path}`);
-        if (condition.tag) parts.push(`элемент=${condition.tag}`);
-        if (condition.classes) parts.push(`class=${condition.classes}`);
+        if (condition.path) parts.push(`путь=${condition.path}`);
+        if (condition.tag) parts.push(`тег=${condition.tag}`);
+        if (condition.classes) parts.push(`класс=${condition.classes}`);
         if (condition.text) parts.push(`текст=${condition.text}`);
         return parts.length ? `[${index + 1}] ${parts.join('; ')}` : '';
       }

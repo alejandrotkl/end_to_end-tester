@@ -337,13 +337,14 @@ async function saveCredential() {
     }
 
     const links = matching.links;
-    const afterRemove = removePendingDomain(domain);
 
     els.formStatus.textContent = 'Запуск повторной проверки в той же задаче…';
     await api(`/jobs/${pending.jobId}/recheck`, {
       method: 'POST',
       jsonBody: { links },
     });
+
+    const afterRemove = removePendingDomain(domain);
 
     if (afterRemove?.done) {
       els.formStatus.textContent = 'Сохранено, перепроверка запущена…';

@@ -146,9 +146,9 @@ function formatRequireNote(require) {
     .map((condition, index) => {
       if (condition.kind === 'element' || condition.path || condition.tag || condition.classes || condition.text) {
         const parts = [];
-        if (condition.path) parts.push(`внутри=${condition.path}`);
-        if (condition.tag) parts.push(`элемент=${condition.tag}`);
-        if (condition.classes) parts.push(`class=${condition.classes}`);
+        if (condition.path) parts.push(`путь=${condition.path}`);
+        if (condition.tag) parts.push(`тег=${condition.tag}`);
+        if (condition.classes) parts.push(`класс=${condition.classes}`);
         if (condition.text) parts.push(`текст=${condition.text}`);
         return parts.length ? `[${index + 1}] ${parts.join('; ')}` : '';
       }
@@ -188,20 +188,20 @@ function createRequireRow(condition) {
   row.innerHTML = `
     <div class="link-require-fields">
       <label class="link-require-field">
-        <span>Внутри</span>
-        <input type="text" class="link-require-path" placeholder="form / nav / tr" title="Опционально: родительские теги" />
+        <span>Путь</span>
+        <input type="text" class="link-require-path" placeholder="родители: tr / tbody tr / form" title="Только родительские теги до цели (саму цель не писать). Пример: tr или nav ul" />
       </label>
       <label class="link-require-field link-require-field-tag">
-        <span>Элемент</span>
-        <input type="text" class="link-require-tag" placeholder="button / a / td" title="Тег: button, a, td, div…" />
+        <span>Тег</span>
+        <input type="text" class="link-require-tag" placeholder="сам элемент: td / button / a" title="Имя тега искомого элемента: td, button, a, div…" />
       </label>
       <label class="link-require-field link-require-field-class">
-        <span>Классы</span>
-        <input type="text" class="link-require-class" placeholder="вставьте class как в HTML" title="class целиком из DevTools" />
+        <span>Класс</span>
+        <input type="text" class="link-require-class" placeholder="вставьте class из DevTools целиком" title="Можно вставить class целиком. Layout/xl/tablet/desktop и […] программа отбросит сама и будет искать по значимым class" />
       </label>
       <label class="link-require-field">
         <span>Текст</span>
-        <input type="text" class="link-require-text" placeholder="опционально" title="Прямой текст именно этого элемента" />
+        <input type="text" class="link-require-text" placeholder="точный текст узла" title="Точный прямой текст именно этого элемента (не из вложенных тегов)" />
       </label>
       <button type="button" class="danger small-btn link-require-remove" title="Удалить условие">✕</button>
     </div>
@@ -684,6 +684,7 @@ function renderProgress(progress) {
 
   const statusLabels = {
     pending: 'ожидание запуска…',
+    running: 'проверка идёт…',
     completed: 'проверка завершена',
     failed: 'задача завершилась с ошибкой',
   };
@@ -701,8 +702,6 @@ function renderProgress(progress) {
   }
 
   const rows = results
-    .slice()
-    .reverse()
     .map(
       (r) => `
       <tr>
@@ -810,6 +809,7 @@ function maybeShowLoginPrompt(progress) {
 
   // Пока задача ещё бежит — не отвлекаем баннером.
   if (progress.status === 'pending' || progress.status === 'running') {
+    hideLoginBanner();
     return;
   }
 

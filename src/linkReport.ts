@@ -64,9 +64,9 @@ export function formatRequireNote(require?: LinkRequireCondition[]): string {
         condition.text
       ) {
         const parts: string[] = [];
-        if (condition.path) parts.push(`внутри=${condition.path}`);
-        if (condition.tag) parts.push(`элемент=${condition.tag}`);
-        if (condition.classes) parts.push(`class=${condition.classes}`);
+        if (condition.path) parts.push(`путь=${condition.path}`);
+        if (condition.tag) parts.push(`тег=${condition.tag}`);
+        if (condition.classes) parts.push(`класс=${condition.classes}`);
         if (condition.text) parts.push(`текст=${condition.text}`);
         return parts.length ? `[${index + 1}] ${parts.join('; ')}` : '';
       }

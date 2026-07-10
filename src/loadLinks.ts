@@ -4,21 +4,32 @@ import { extname, resolve } from 'node:path';
 const URL_PATTERN = /^https?:\/\/.+/i;
 
 /**
- * Условие успеха по структуре HTML:
- * путь (tbody td) + тег (a/button) + class как в атрибуте + опционально текст.
+ * Условие успеха по структуре HTML (поля UI: Путь / Тег / Класс / Текст).
  * kind selector/text — устаревшие форматы, ещё читаются из старых черновиков.
  */
 export type LinkRequireKind = 'element' | 'selector' | 'text';
 
 export interface LinkRequireCondition {
   kind: LinkRequireKind;
-  /** Родительские теги через пробел или «>», например: tbody td */
+  /**
+   * Путь — только родительские теги до цели (саму цель не писать).
+   * Пример: `tr`, `tbody tr`, `form`, `nav ul`
+   */
   path?: string;
-  /** Тег искомого элемента: a, button, td, … */
+  /**
+   * Тег — имя искомого элемента.
+   * Пример: `td`, `button`, `a`, `div`
+   */
   tag?: string;
-  /** Значение class как в HTML (через пробел), без точек */
+  /**
+   * Класс — можно вставить class целиком из DevTools.
+   * При проверке layout/responsive-шум (xl:, tablet/desktop, […]) отбрасывается.
+   */
   classes?: string;
-  /** Точный прямой текст элемента */
+  /**
+   * Текст — точный прямой текст узла (не из вложенных тегов).
+   * Пример: `9`, `Войти`, `Сохранить`
+   */
   text?: string;
   /** Устаревшее: CSS-селектор или текст страницы */
   value?: string;
@@ -84,6 +95,93 @@ export function parseClassList(raw: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Layout / breakpoint / arbitrary Tailwind — не идентичность элемента.
+ * Тематические class (`*theme*`) оставляем даже с tablet/desktop в имени:
+ * это не layout, а подпись элемента (text-theme-tablet-num-1).
+ */
+export function isNoiseClass(className: string): boolean {
+  const token = className.trim();
+  if (!token) return true;
+
+  // Произвольные значения: !w-[var(--tablet-width)], xl:!w-[…]
+  if (token.includes('[')) return true;
+
+  // Тема/дизайн-токены — всегда значимы (даже text-theme-tablet-…)
+  if (/theme/i.test(token)) return false;
+
+  // Явные viewport/device маркеры в имени (не theme)
+  if (/tablet|desktop|mobile|breakpoint/i.test(token)) return true;
+
+  const withoutImportant = token.replace(/^!+/, '');
+  // Варианты: sm: md: lg: xl: 2xl: dark: hover: group-hover: …
+  const base = withoutImportant.replace(/^(?:[a-z0-9_-]+:)+/i, '').replace(/^!+/, '');
+  if (!base) return true;
+
+  // Размеры, отступы, flex/grid, позиционирование — часто отличаются по брейкпоинту
+  if (
+    /^(?:w|h|min-w|max-w|min-h|max-h|size|p|px|py|pt|pb|pl|pr|ps|pe|m|mx|my|mt|mb|ml|mr|ms|me|gap|space-[xy]|inset|top|left|right|bottom|start|end|basis|grow|shrink|order|col-span|row-span|columns|grid-cols|grid-rows|auto-cols|auto-rows|z|opacity|translate|rotate|scale|skew|origin|duration|delay|ease|transition|animate|shadow|ring|outline|overflow|object|justify|items|content|self|place|cursor|font|leading|tracking|whitespace|break|hyphens|content)-/i.test(
+      base,
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    /^(?:flex|inline-flex|grid|inline-grid|block|inline-block|inline|contents|hidden|sr-only|truncate|grow|shrink|basis|relative|absolute|fixed|sticky|static|font-medium|font-bold|font-semibold|font-normal|italic|underline|antialiased)$/i.test(
+      base,
+    )
+  ) {
+    return true;
+  }
+
+  // border / rounded без «темы» — декоративная обвязка
+  if (/^border(?:-[trblxyse]{1,2})?$/i.test(base)) return true;
+  if (/^rounded(?:-[trblxyse]{1,2})?(?:-(?:sm|md|lg|xl|2xl|3xl|full))?$/i.test(base)) return true;
+
+  return false;
+}
+
+/**
+ * Нормализация class для сравнения:
+ * xl:text-theme-num-1 и text-theme-tablet-num-1 → text-theme-num-1
+ */
+export function classFingerprint(className: string): string {
+  let token = className.trim().replace(/^!+/, '');
+  token = token.replace(/^(?:[a-z0-9_-]+:)+/i, '').replace(/^!+/, '');
+  token = token.replace(/-tablet-|-desktop-|-mobile-/gi, '-');
+  return token.toLowerCase();
+}
+
+/**
+ * Значимые классы для поиска: из полной вставки DevTools.
+ * Если есть theme-* — используем только их (надёжнее, чем font-medium + xl:…).
+ */
+export function significantClasses(rawOrList: string | string[]): string[] {
+  const list = Array.isArray(rawOrList) ? rawOrList : parseClassList(rawOrList);
+  const kept = list.filter((name) => !isNoiseClass(name));
+  const preferred = kept.some((name) => /theme/i.test(name))
+    ? kept.filter((name) => /theme/i.test(name))
+    : kept;
+
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const name of preferred) {
+    const fp = classFingerprint(name);
+    if (!fp || seen.has(fp)) continue;
+    seen.add(fp);
+    result.push(name);
+  }
+
+  return result;
+}
+
+/** Отпечатки значимых class — ими ищем на элементе. */
+export function significantClassFingerprints(rawOrList: string | string[]): string[] {
+  return significantClasses(rawOrList).map((name) => classFingerprint(name));
+}
+
 /** Путь тегов: «tbody > tr td» или «tbody td» → ['tbody','tr','td'] (только имена тегов). */
 export function parseElementPath(raw: string): string[] {
   return raw
@@ -144,7 +242,7 @@ export function buildElementSelector(condition: {
 }): string {
   const pathTags = condition.path ? parseElementPath(condition.path) : [];
   const tag = (condition.tag || '').trim().toLowerCase();
-  const classes = condition.classes ? parseClassList(condition.classes) : [];
+  const classes = condition.classes ? significantClasses(condition.classes) : [];
   const classPart = classes.map((name) => `.${escapeCssIdent(name)}`).join('');
 
   let leaf: string;

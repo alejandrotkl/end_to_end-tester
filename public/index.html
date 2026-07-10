@@ -9,17 +9,8 @@
 </head>
 <body>
   <header>
-    <h1>Playwright Link Tester</h1>
-    <nav class="nav-links">
-      <a href="/" class="nav-link active">Проверка</a>
-      <a href="/logs.html" class="nav-link">Логи задач</a>
-      <a href="/credentials.html" class="nav-link">Доступы для входа</a>
-    </nav>
-    <div class="key-row">
-      <label for="api-key">API-ключ</label>
-      <input type="password" id="api-key" placeholder="X-API-Key" autocomplete="off" />
-      <button id="save-key">Сохранить</button>
-      <span id="key-status" class="status-text"></span>
+    <div class="header-top">
+      <h1>Playwright Link Tester</h1>
       <button type="button" id="theme-toggle" class="theme-switch" aria-label="Переключить тему">
         <span class="theme-switch-track" aria-hidden="true">
           <span class="theme-switch-icon theme-switch-sun">
@@ -31,6 +22,17 @@
         </span>
         <span class="theme-switch-knob" aria-hidden="true"></span>
       </button>
+    </div>
+    <nav class="nav-links">
+      <a href="/" class="nav-link active">Проверка</a>
+      <a href="/logs.html" class="nav-link">Логи задач</a>
+      <a href="/credentials.html" class="nav-link">Доступы для входа</a>
+    </nav>
+    <div class="key-row">
+      <label for="api-key">API-ключ</label>
+      <input type="password" id="api-key" placeholder="X-API-Key" autocomplete="off" />
+      <button id="save-key">Сохранить</button>
+      <span id="key-status" class="status-text"></span>
     </div>
   </header>
 
